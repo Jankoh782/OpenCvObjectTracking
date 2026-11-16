@@ -3,11 +3,16 @@
 
     <uses-permission android:name="android.permission.CAMERA"/>
 
-    <uses-feature android:name="android.hardware.camera" android:required="false"/>
-    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false"/>
-    <uses-feature android:name="android.hardware.camera.front" android:required="false"/>
-    <uses-feature android:name="android.hardware.camera.front.autofocus" android:required="false"/>
-    <uses-feature android:name="android.hardware.camera2.full" android:required="false"/>
+    <!-- Povolenia pre Bluetooth (starší aj moderný Android 12+ na Samsung A26) -->
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+
+    <!-- Hardvérové požiadavky -->
+    <uses-feature android:name="android.hardware.camera" android:required="true"/>
+    <uses-feature android:name="android.hardware.camera.ar" android:required="true"/>
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false"/>
 
     <application
         android:allowBackup="true"
@@ -16,9 +21,14 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
+
+        <!-- Povinné pre Google ARCore -->
+        <meta-data android:name="com.google.ar.core" android:value="required" />
+
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
