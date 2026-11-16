@@ -9,7 +9,7 @@ android {
 
     defaultConfig {
         applicationId = "io.github.chayanforyou.tracking"
-        minSdk = 21
+        minSdk = 24
         targetSdk = 36
         versionCode = 1
         versionName = "1.0.0"
@@ -36,7 +36,6 @@ android {
 }
 
 dependencies {
-
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.material)
@@ -46,4 +45,7 @@ dependencies {
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     implementation(project(":openCVLibrary412"))
+
+    // Google ARCore SDK (3D sledovanie a Depth API)
+    implementation("com.google.ar:core:1.47.0")
 }
