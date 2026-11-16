@@ -2,42 +2,48 @@ package io.github.chayanforyou.tracking
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothSocket
+import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.ImageFormat
 import android.graphics.Paint
 import android.graphics.Point
-import android.graphics.SurfaceTexture
-import android.hardware.camera2.CameraAccessException
-import android.hardware.camera2.CameraCaptureSession
-import android.hardware.camera2.CameraDevice
-import android.hardware.camera2.CameraManager
-import android.hardware.camera2.CaptureRequest
-import android.media.ImageReader
+import android.media.Image
+import android.opengl.GLES20
+import android.opengl.GLSurfaceView
+import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.HandlerThread
-import android.util.Size
+import android.os.Environment
+import android.provider.MediaStore
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.Surface
-import android.view.TextureView
+import android.view.WindowManager
+import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.RadioButton
 import android.widget.RadioGroup
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
+import com.google.ar.core.ArCoreApk
+import com.google.ar.core.Config
+import com.google.ar.core.Frame
+import com.google.ar.core.Session
+import com.google.ar.core.TrackingState
 import org.opencv.android.OpenCVLoader
 import org.opencv.core.Core
+import org.opencv.core.CvType
 import org.opencv.core.Mat
-import org.opencv.core.MatOfByte
 import org.opencv.core.Rect2d
-import org.opencv.imgcodecs.Imgcodecs
 import org.opencv.imgproc.Imgproc
 import org.opencv.tracking.legacy_Tracker
 import org.opencv.tracking.legacy_TrackerCSRT
@@ -46,387 +52,197 @@ import org.opencv.tracking.legacy_TrackerMIL
 import org.opencv.tracking.legacy_TrackerMOSSE
 import org.opencv.tracking.legacy_TrackerMedianFlow
 import org.opencv.tracking.legacy_TrackerTLD
+import java.io.OutputStream
+import java.nio.ByteOrder
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.locks.ReentrantLock
+import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.opengles.GL10
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
-    private lateinit var textureView: TextureView
+    private lateinit var surfaceView: GLSurfaceView
     private lateinit var trackingOverlay: OverlayView
     private lateinit var selectTracker: FloatingActionButton
+    private lateinit var tvCoordinates: TextView
+    private lateinit var tvScanStatus: TextView
+    private lateinit var btnBluetooth: Button
+    private lateinit var btnScanToggle: Button
+    private lateinit var btnExportPly: Button
 
-    private var cameraDevice: CameraDevice? = null
-    private var captureSession: CameraCaptureSession? = null
-    private var previewRequestBuilder: CaptureRequest.Builder? = null
-    private var backgroundHandler: Handler? = null
-    private var backgroundThread: HandlerThread? = null
-    private val cameraLock = ReentrantLock()
+    // ARCore
+    private var arSession: Session? = null
+    private val backgroundRenderer = BackgroundRenderer()
+    private var installRequested = false
+
+    // OpenCV Tracking
     private var imageGrab: Mat? = null
-    private var imageReader: ImageReader? = null
     private var tracker: legacy_Tracker? = null
     private var drawing = Drawing.DRAWING
-    private var selectedTracker = TrackerType.MEDIAN_FLOW
-    private val camResolution = Size(1280, 720)
+    private var selectedTracker = TrackerType.CSRT
     private val points = arrayOf(Point(0, 0), Point(0, 0))
-    private var isProcessing = false
     private var isTargetLocked = false
 
-    private enum class Drawing {
-        DRAWING, TRACKING, CLEAR
-    }
+    // 3D Mapovanie (.ply)
+    private var isScanning3D = false
+    private val pointCloudList = CopyOnWriteArrayList<FloatArray>()
+    private var frameCounter = 0
 
-    private enum class TrackerType {
-        MEDIAN_FLOW, CSRT, KCF, MOSSE, TLD, MIL
-    }
+    // Bluetooth (HC-05 / HC-06 / ESP32 SPP)
+    private val sppUuid: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+    private var btSocket: BluetoothSocket? = null
+    private var btOutputStream: OutputStream? = null
+    private var isBtConnected = false
+    private var lastBtSendTime = 0L
 
-    private val requestPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-            if (!granted) {
-                Toast.makeText(this, "Sorry!!!, you can't use this app without granting permission", Toast.LENGTH_LONG).show()
+    private enum class Drawing { DRAWING, TRACKING, CLEAR }
+    private enum class TrackerType { MEDIAN_FLOW, CSRT, KCF, MOSSE, TLD, MIL }
+
+    private val permissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            if (permissions[Manifest.permission.CAMERA] != true) {
+                Toast.makeText(this, "Aplikácia vyžaduje povolenie pre kameru!", Toast.LENGTH_LONG).show()
             }
         }
 
-    private val textureListener = object : TextureView.SurfaceTextureListener {
-        override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
-            openCamera()
-        }
-        override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
-        override fun onSurfaceTextureDestroyed(surface: SurfaceTexture) = false
-        override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
-    }
-
+    @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (!OpenCVLoader.initLocal()) {
-            Toast.makeText(this, "OpenCV initialization failed!", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Chyba inicializácie OpenCV!", Toast.LENGTH_LONG).show()
             return
         }
         setContentView(R.layout.activity_main)
-        textureView = findViewById(R.id.texture)
+
+        surfaceView = findViewById(R.id.surfaceview)
         trackingOverlay = findViewById(R.id.tracking_overlay)
         selectTracker = findViewById(R.id.select_tracker)
-        textureView.surfaceTextureListener = textureListener
+        tvCoordinates = findViewById(R.id.tv_coordinates)
+        tvScanStatus = findViewById(R.id.tv_scan_status)
+        btnBluetooth = findViewById(R.id.btn_bluetooth)
+        btnScanToggle = findViewById(R.id.btn_scan_toggle)
+        btnExportPly = findViewById(R.id.btn_export_ply)
+
+        surfaceView.preserveEGLContextOnPause = true
+        surfaceView.setEGLContextClientVersion(2)
+        surfaceView.setEGLConfigChooser(8, 8, 8, 8, 16, 0)
+        surfaceView.setRenderer(this)
+        surfaceView.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+
+        setupOverlayCallbacks()
+
         selectTracker.setOnClickListener { selectTracker() }
+        btnBluetooth.setOnClickListener { showBluetoothDevicesDialog() }
+        btnScanToggle.setOnClickListener { toggle3DScanning() }
+        btnExportPly.setOnClickListener { exportPointCloudToPly() }
+
+        requestAppPermissions()
+    }
+
+    private fun requestAppPermissions() {
+        val perms = mutableListOf(Manifest.permission.CAMERA)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            perms.add(Manifest.permission.BLUETOOTH_CONNECT)
+            perms.add(Manifest.permission.BLUETOOTH_SCAN)
+        }
+        permissionLauncher.launch(perms.toTypedArray())
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupOverlayCallbacks() {
+        trackingOverlay.addCallback(object : OverlayView.DrawCallback {
+            override fun drawCallback(canvas: Canvas) {
+                if (drawing != Drawing.CLEAR) {
+                    val paint = Paint().apply {
+                        color = if (drawing == Drawing.TRACKING) Color.GREEN else Color.BLUE
+                        strokeWidth = 8f
+                        style = Paint.Style.STROKE
+                    }
+                    canvas.drawRect(
+                        points[0].x.toFloat(), points[0].y.toFloat(),
+                        points[1].x.toFloat(), points[1].y.toFloat(), paint
+                    )
+                    if (drawing == Drawing.TRACKING) {
+                        val cx = (points[0].x + points[1].x) / 2f
+                        val cy = (points[0].y + points[1].y) / 2f
+                        canvas.drawLine(cx, 0f, cx, trackingOverlay.height.toFloat(), paint)
+                        canvas.drawLine(0f, cy, trackingOverlay.width.toFloat(), cy, paint)
+                    }
+                }
+            }
+        })
+
+        trackingOverlay.setOnTouchListener { _, event ->
+            val x = event.x.toInt()
+            val y = event.y.toInt()
+            when (event.action and MotionEvent.ACTION_MASK) {
+                MotionEvent.ACTION_DOWN -> if (!isTargetLocked) {
+                    drawing = Drawing.DRAWING
+                    points[0].set(x, y)
+                    points[1].set(x, y)
+                    trackingOverlay.invalidate()
+                }
+                MotionEvent.ACTION_MOVE -> if (!isTargetLocked) {
+                    points[1].set(x, y)
+                    trackingOverlay.invalidate()
+                }
+                MotionEvent.ACTION_UP -> if (!isTargetLocked) {
+                    drawing = Drawing.CLEAR
+                    trackingOverlay.invalidate()
+                }
+                MotionEvent.ACTION_POINTER_DOWN -> {
+                    isTargetLocked = !isTargetLocked
+                    drawing = Drawing.DRAWING
+                    trackingOverlay.invalidate()
+                    if (isTargetLocked) {
+                        selectTracker.hide()
+                        Toast.makeText(this, "Cieľ ZAMKNUTÝ (2 prsty = odomknúť)", Toast.LENGTH_SHORT).show()
+                    } else {
+                        selectTracker.show()
+                        tvCoordinates.text = "3D Poloha: Čakám na výber objektu..."
+                        Toast.makeText(this, "Cieľ ODOMKNUTÝ", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+            true
+        }
     }
 
     override fun onResume() {
         super.onResume()
-        startBackgroundThread()
-        if (textureView.isAvailable) {
-            openCamera()
-        }
-    }
-
-    override fun onPause() {
-        closeCamera()
-        stopBackgroundThread()
-        super.onPause()
-    }
-
-    override fun onDestroy() {
-        imageGrab?.release()
-        imageGrab = null
-        tracker?.clear()
-        tracker = null
-        super.onDestroy()
-    }
-
-    private fun startBackgroundThread() {
-        backgroundThread = HandlerThread("obj-tracking-thread").apply { start() }
-        backgroundHandler = Handler(backgroundThread!!.looper)
-    }
-
-    private fun stopBackgroundThread() {
-        backgroundThread?.quitSafely()
-        try {
-            backgroundThread?.join()
-            backgroundThread = null
-            backgroundHandler = null
-        } catch (e: InterruptedException) {
-            e.printStackTrace()
-        }
-    }
-
-    private fun openCamera() {
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissionLauncher.launch(Manifest.permission.CAMERA)
             return
         }
-
-        val manager = getSystemService(CAMERA_SERVICE) as CameraManager
-        try {
-            val cameraId = manager.cameraIdList.first()
-            if (!cameraLock.tryLock(2500, TimeUnit.MILLISECONDS)) {
-                throw RuntimeException("Timeout waiting to lock camera")
+        if (arSession == null) {
+            try {
+                when (ArCoreApk.getInstance().requestInstall(this, !installRequested)) {
+                    ArCoreApk.InstallStatus.INSTALL_REQUESTED -> {
+                        installRequested = true
+                        return
+                    }
+                    ArCoreApk.InstallStatus.INSTALLED -> {}
+                }
+                arSession = Session(this).apply {
+                    val config = Config(this)
+                    if (isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
+                        config.depthMode = Config.DepthMode.AUTOMATIC
+                    }
+                    config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
+                    configure(config)
+                }
+            } catch (e: Exception) {
+                Toast.makeText(this, "ARCore chyba: ${e.message}", Toast.LENGTH_LONG).show()
+                return
             }
-            manager.openCamera(cameraId, stateCallback, null)
-        } catch (e: CameraAccessException) {
+        }
+        try {
+            arSession?.resume()
+            surfaceView.onResume()
+        } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    private fun closeCamera() {
-        cameraLock.lock()
-        try {
-            captureSession?.close()
-            captureSession = null
-            cameraDevice?.close()
-            cameraDevice = null
-            imageReader?.close()
-            imageReader = null
-        } finally {
-            cameraLock.unlock()
-        }
-    }
-
-    private val stateCallback = object : CameraDevice.StateCallback() {
-        override fun onOpened(camera: CameraDevice) {
-            cameraLock.unlock()
-            cameraDevice = camera
-            createCameraPreview()
-        }
-
-        override fun onDisconnected(camera: CameraDevice) {
-            cameraLock.unlock()
-            cameraDevice?.close()
-        }
-
-        override fun onError(camera: CameraDevice, error: Int) {
-            cameraLock.unlock()
-            cameraDevice?.close()
-            cameraDevice = null
-        }
-    }
-
-    @SuppressLint("ClickableViewAccessibility")
-    private fun createCameraPreview() {
-        try {
-            val texture = textureView.surfaceTexture
-            texture?.setDefaultBufferSize(camResolution.width, camResolution.height)
-            val surface = Surface(texture)
-            previewRequestBuilder = cameraDevice?.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)?.apply {
-                addTarget(surface)
-            }
-            imageReader = ImageReader.newInstance(camResolution.width, camResolution.height, ImageFormat.JPEG, 2).apply {
-                setOnImageAvailableListener(onImageAvailableListener, backgroundHandler)
-            }
-            previewRequestBuilder?.addTarget(imageReader!!.surface)
-            cameraDevice?.createCaptureSession(
-                listOf(surface, imageReader!!.surface),
-                object : CameraCaptureSession.StateCallback() {
-                    override fun onConfigured(session: CameraCaptureSession) {
-                        if (cameraDevice == null) return
-                        captureSession = session
-                        previewRequestBuilder?.set(
-                            CaptureRequest.CONTROL_AF_MODE,
-                            CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                        )
-                        previewRequestBuilder?.set(
-                            CaptureRequest.CONTROL_AE_MODE,
-                            CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH
-                        )
-                        try {
-                            session.setRepeatingRequest(
-                                previewRequestBuilder!!.build(),
-                                null,
-                                backgroundHandler
-                            )
-                        } catch (e: CameraAccessException) {
-                            e.printStackTrace()
-                        }
-                    }
-
-                    override fun onConfigureFailed(session: CameraCaptureSession) {
-                        Toast.makeText(this@MainActivity, "Configuration change", Toast.LENGTH_SHORT).show()
-                    }
-                },
-                null
-            )
-
-            trackingOverlay.addCallback(object : OverlayView.DrawCallback {
-                override fun drawCallback(canvas: Canvas) {
-                    if (drawing != Drawing.CLEAR) {
-                        val paint = Paint().apply {
-                            color = Color.BLUE
-                            strokeWidth = 10f
-                            style = Paint.Style.STROKE
-                        }
-                        canvas.drawRect(
-                            points[0].x.toFloat(),
-                            points[0].y.toFloat(),
-                            points[1].x.toFloat(),
-                            points[1].y.toFloat(),
-                            paint
-                        )
-                        if (drawing == Drawing.TRACKING) {
-                            paint.color = Color.GREEN
-                            canvas.drawLine(
-                                (points[0].x + points[1].x) / 2f, 0f,
-                                (points[0].x + points[1].x) / 2f, trackingOverlay.height.toFloat(),
-                                paint
-                            )
-                            canvas.drawLine(
-                                0f, (points[0].y + points[1].y) / 2f,
-                                trackingOverlay.width.toFloat(), (points[0].y + points[1].y) / 2f,
-                                paint
-                            )
-                        }
-                    }
-                }
-            })
-
-            trackingOverlay.setOnTouchListener { _, event ->
-                val x = event.x.toInt()
-                val y = event.y.toInt()
-                when (event.action and MotionEvent.ACTION_MASK) {
-                    MotionEvent.ACTION_DOWN -> if (!isTargetLocked) {
-                        drawing = Drawing.DRAWING
-                        points[0].set(x, y)
-                        points[1].set(x, y)
-                        trackingOverlay.invalidate()
-                    }
-                    MotionEvent.ACTION_MOVE -> if (!isTargetLocked) {
-                        points[1].set(x, y)
-                        trackingOverlay.invalidate()
-                    }
-                    MotionEvent.ACTION_UP -> if (!isTargetLocked) {
-                        drawing = Drawing.CLEAR
-                        trackingOverlay.invalidate()
-                    }
-                    MotionEvent.ACTION_POINTER_DOWN -> {
-                        isTargetLocked = !isTargetLocked
-                        drawing = Drawing.DRAWING
-                        trackingOverlay.invalidate()
-
-                        if (isTargetLocked) {
-                            selectTracker.hide()
-                            Toast.makeText(this@MainActivity, "Target LOCKED", Toast.LENGTH_SHORT).show()
-                        } else {
-                            selectTracker.show()
-                            Toast.makeText(this@MainActivity, "Target UNLOCKED", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }
-                true
-            }
-        } catch (e: CameraAccessException) {
-            e.printStackTrace()
-        }
-    }
-
-    private val onImageAvailableListener = ImageReader.OnImageAvailableListener { reader ->
-        val image = reader.acquireLatestImage() ?: return@OnImageAvailableListener
-        if (isProcessing) {
-            image.close()
-            return@OnImageAvailableListener
-        }
-        isProcessing = true
-
-        try {
-            if (isTargetLocked) {
-                val buffer = image.planes[0].buffer
-                val data = ByteArray(buffer.remaining()).also { buffer.get(it) }
-                imageGrab?.release()
-                imageGrab = Imgcodecs.imdecode(MatOfByte(*data), Imgcodecs.IMREAD_UNCHANGED).apply {
-                    Core.transpose(this, this)
-                    Core.flip(this, this, 1)
-                    Imgproc.resize(this, this, org.opencv.core.Size(240.0, 320.0))
-                }
-            }
-            processFrame()
-        } finally {
-            image.close()
-            isProcessing = false
-        }
-    }
-
-    private fun processFrame() {
-        if (isTargetLocked && imageGrab != null) {
-            if (drawing == Drawing.DRAWING) {
-                val minX = (minOf(points[0].x.toFloat(), points[1].x.toFloat()) / trackingOverlay.width * imageGrab!!.cols()).toInt()
-                val minY = (minOf(points[0].y.toFloat(), points[1].y.toFloat()) / trackingOverlay.height * imageGrab!!.rows()).toInt()
-                val maxX = (maxOf(points[0].x.toFloat(), points[1].x.toFloat()) / trackingOverlay.width * imageGrab!!.cols()).toInt()
-                val maxY = (maxOf(points[0].y.toFloat(), points[1].y.toFloat()) / trackingOverlay.height * imageGrab!!.rows()).toInt()
-
-                val initRectangle = Rect2d(minX.toDouble(), minY.toDouble(), (maxX - minX).toDouble(), (maxY - minY).toDouble())
-                tracker = when (selectedTracker) {
-                    TrackerType.MEDIAN_FLOW -> legacy_TrackerMedianFlow.create()
-                    TrackerType.CSRT -> legacy_TrackerCSRT.create()
-                    TrackerType.KCF -> legacy_TrackerKCF.create()
-                    TrackerType.MOSSE -> legacy_TrackerMOSSE.create()
-                    TrackerType.TLD -> legacy_TrackerTLD.create()
-                    TrackerType.MIL -> legacy_TrackerMIL.create()
-                }.apply {
-                    init(imageGrab!!, initRectangle)
-                }
-                drawing = Drawing.TRACKING
-            } else {
-                val trackingRectangle = Rect2d()
-                tracker?.update(imageGrab!!, trackingRectangle)?.let { success ->
-                    if (success) {
-                        points[0].x = (trackingRectangle.x * trackingOverlay.width / imageGrab!!.cols()).toInt()
-                        points[0].y = (trackingRectangle.y * trackingOverlay.height / imageGrab!!.rows()).toInt()
-                        points[1].x = points[0].x + (trackingRectangle.width * trackingOverlay.width / imageGrab!!.cols()).toInt()
-                        points[1].y = points[0].y + (trackingRectangle.height * trackingOverlay.height / imageGrab!!.rows()).toInt()
-                        trackingOverlay.invalidate()
-                    }
-                }
-            }
-        } else {
-            tracker?.clear()
-            tracker = null
-        }
-    }
-
-    private fun selectTracker() {
-        val builder = MaterialAlertDialogBuilder(this)
-        builder.setTitle("Tracker Selection")
-
-        val trackerMap = mapOf(
-            TrackerType.MEDIAN_FLOW to "TrackerMedianFlow (Fast)",
-            TrackerType.CSRT to "TrackerCSRT (High Accuracy)",
-            TrackerType.KCF to "TrackerKCF (Fast & Accurate)",
-            TrackerType.MOSSE to "TrackerMOSSE (Ultra Fast)",
-            TrackerType.TLD to "TrackerTLD (Long-term)",
-            TrackerType.MIL to "TrackerMIL (Reliable)"
-        )
-
-        val radioButtons = Array(trackerMap.size) { RadioButton(this) }
-        val radioGroup = RadioGroup(this).apply {
-            orientation = RadioGroup.VERTICAL
-        }
-
-        trackerMap.entries.forEachIndexed { index, (tracker, name) ->
-            radioButtons[index].also { rb ->
-                rb.id = index + 100
-                rb.text = String.format(Locale.getDefault(), "%s", name)
-                rb.isChecked = (tracker == selectedTracker)
-                radioGroup.addView(rb)
-            }
-        }
-
-        radioGroup.setOnCheckedChangeListener { _, checkedId ->
-            val radioButton = radioGroup.findViewById<RadioButton>(checkedId)
-            if (radioButton?.isChecked == true) {
-                val tracker = trackerMap.entries.find {
-                    it.value == radioButton.text.toString().trim()
-                }?.key
-                if (tracker != null) selectedTracker = tracker
-            }
-        }
-
-        val layout = LinearLayout(this).apply {
-            setPadding(60, 40, 0, 0)
-            gravity = Gravity.FILL_HORIZONTAL
-            addView(radioGroup)
-        }
-
-        builder.setView(layout)
-        builder.setPositiveButton("OK") { dialog, _ ->
-            dialog.dismiss()
-        }
-        builder.setCancelable(false)
-        builder.show()
-    }
-}
