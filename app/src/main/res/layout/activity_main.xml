@@ -3,19 +3,81 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:keepScreenOn="true"
-    android:orientation="vertical">
+    android:keepScreenOn="true">
 
-    <TextureView
-        android:id="@+id/texture"
+    <!-- ARCore kamera a vykresľovanie -->
+    <android.opengl.GLSurfaceView
+        android:id="@+id/surfaceview"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content" />
+        android:layout_height="match_parent" />
 
+    <!-- Vrstva na kreslenie obdĺžnika prstom a zobrazenie sledovania -->
     <io.github.chayanforyou.tracking.OverlayView
         android:id="@+id/tracking_overlay"
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
+    <!-- Horný informačný panel: 3D súradnice (X, Y, Z) a počet bodov 3D mapy -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="#80000000"
+        android:orientation="vertical"
+        android:padding="12dp">
+
+        <TextView
+            android:id="@+id/tv_coordinates"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="3D Poloha: Čakám na výber objektu..."
+            android:textColor="#00FF00"
+            android:textSize="14sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tv_scan_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="3D Mapa (.ply): 0 bodov | BT: Odpojené"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <!-- Spodný panel s tlačidlami: Bluetooth, Skenovať, Export .ply -->
+    <LinearLayout
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|start"
+        android:layout_margin="16dp"
+        android:orientation="vertical">
+
+        <Button
+            android:id="@+id/btn_bluetooth"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Pripojiť BT (Arduino)"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btn_scan_toggle"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Štart 3D skenu"
+            android:textSize="12sp" />
+
+        <Button
+            android:id="@+id/btn_export_ply"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Export .PLY"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <!-- Pôvodné tlačidlo na výber typu sledovača (CSRT, KCF...) -->
     <com.google.android.material.floatingactionbutton.FloatingActionButton
         android:id="@+id/select_tracker"
         android:layout_width="wrap_content"
