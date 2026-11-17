@@ -52,6 +52,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private var isScanning3D = false
     private var frameCounter = 0
     private val plyExporter = PlyExporter()
+    private val pointCloudRenderer = PointCloudRenderer()
     private lateinit var btHelper: BluetoothHelper
     private lateinit var trackerEngine: ArTrackerEngine
 
@@ -220,6 +221,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0.1f, 0.1f, 0.1f, 1.0f)
         backgroundRenderer.createOnGlThread()
+        pointCloudRenderer.createOnGlThread()
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
@@ -236,6 +238,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             session.setCameraTextureName(backgroundRenderer.textureId)
             val frame = session.update()
             backgroundRenderer.draw(frame)
+            pointCloudRenderer.draw(frame.camera, plyExporter.pointCloudList)
             if (frame.camera.trackingState != TrackingState.TRACKING) return
 
             frameCounter++
