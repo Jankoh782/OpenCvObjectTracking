@@ -61,6 +61,7 @@ import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.abs
 
 class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
@@ -104,7 +105,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-            if (permissions[Manifest.permission.CAMERA] != true) {
+            if (permissions.get(Manifest.permission.CAMERA) != true) {
                 Toast.makeText(this, "Aplikácia vyžaduje povolenie pre kameru!", Toast.LENGTH_LONG).show()
             }
         }
@@ -243,5 +244,3 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             arSession?.resume()
             surfaceView.onResume()
         } catch (e: Exception) {
-            e.printStackTrace()
-        }
