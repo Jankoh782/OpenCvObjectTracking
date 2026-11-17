@@ -83,7 +83,8 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private var tracker: legacy_Tracker? = null
     private var drawing = Drawing.DRAWING
     private var selectedTracker = TrackerType.CSRT
-    private val points = arrayOf(Point(0, 0), Point(0, 0))
+    private val pointStart = Point(0, 0)
+    private val pointEnd = Point(0, 0)
     private var isTargetLocked = false
 
     // 3D Mapovanie (.ply)
@@ -162,12 +163,12 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                         style = Paint.Style.STROKE
                     }
                     canvas.drawRect(
-                        points[0].x.toFloat(), points[0].y.toFloat(),
-                        points[1].x.toFloat(), points[1].y.toFloat(), paint
+                        pointStart.x.toFloat(), pointStart.y.toFloat(),
+                        pointEnd.x.toFloat(), pointEnd.y.toFloat(), paint
                     )
                     if (drawing == Drawing.TRACKING) {
-                        val cx = (points[0].x + points[1].x) / 2f
-                        val cy = (points[0].y + points[1].y) / 2f
+                        val cx = (pointStart.x + pointEnd.x) / 2f
+                        val cy = (pointStart.y + pointEnd.y) / 2f
                         canvas.drawLine(cx, 0f, cx, trackingOverlay.height.toFloat(), paint)
                         canvas.drawLine(0f, cy, trackingOverlay.width.toFloat(), cy, paint)
                     }
@@ -181,12 +182,12 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             when (event.action and MotionEvent.ACTION_MASK) {
                 MotionEvent.ACTION_DOWN -> if (!isTargetLocked) {
                     drawing = Drawing.DRAWING
-                    points[0].set(x, y)
-                    points[1].set(x, y)
+                    pointStart.set(x, y)
+                    pointEnd.set(x, y)
                     trackingOverlay.invalidate()
                 }
                 MotionEvent.ACTION_MOVE -> if (!isTargetLocked) {
-                    points[1].set(x, y)
+                    pointEnd.set(x, y)
                     trackingOverlay.invalidate()
                 }
                 MotionEvent.ACTION_UP -> if (!isTargetLocked) {
@@ -244,5 +245,3 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-    }
-
