@@ -7,49 +7,27 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Point
-import android.media.Image
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.Build
 import android.os.Bundle
-import android.view.Gravity
 import android.view.MotionEvent
 import android.view.Surface
 import android.view.WindowManager
 import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.RadioButton
-import android.widget.RadioGroup
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
-import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.FloatingActionButton
 import com.google.ar.core.ArCoreApk
 import com.google.ar.core.Config
-import com.google.ar.core.Frame
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import org.opencv.android.OpenCVLoader
-import org.opencv.core.Core
-import org.opencv.core.CvType
-import org.opencv.core.Mat
-import org.opencv.core.Rect2d
-import org.opencv.imgproc.Imgproc
-import org.opencv.tracking.legacy_Tracker
-import org.opencv.tracking.legacy_TrackerCSRT
-import org.opencv.tracking.legacy_TrackerKCF
-import org.opencv.tracking.legacy_TrackerMIL
-import org.opencv.tracking.legacy_TrackerMOSSE
-import org.opencv.tracking.legacy_TrackerMedianFlow
-import org.opencv.tracking.legacy_TrackerTLD
-import java.nio.ByteOrder
-import java.util.Locale
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
-import kotlin.math.abs
 
 class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
@@ -66,10 +44,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private val backgroundRenderer = BackgroundRenderer()
     private var installRequested = false
 
-    private var imageGrab: Mat? = null
-    private var tracker: legacy_Tracker? = null
     private var drawing = Drawing.DRAWING
-    private var selectedTracker = TrackerType.CSRT
     private val pointStart = Point(0, 0)
     private val pointEnd = Point(0, 0)
     private var isTargetLocked = false
@@ -78,9 +53,9 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private var frameCounter = 0
     private val plyExporter = PlyExporter()
     private lateinit var btHelper: BluetoothHelper
+    private lateinit var trackerEngine: ArTrackerEngine
 
     private enum class Drawing { DRAWING, TRACKING, CLEAR }
-    private enum class TrackerType { MEDIAN_FLOW, CSRT, KCF, MOSSE, TLD, MIL }
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
@@ -110,6 +85,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             btnBluetooth.text = if (connected) "BT: $deviceName" else "Pripojiť BT (Arduino)"
             updateStatusText()
         }
+        trackerEngine = ArTrackerEngine(this, trackingOverlay, tvCoordinates, btHelper)
 
         surfaceView.preserveEGLContextOnPause = true
         surfaceView.setEGLContextClientVersion(2)
@@ -119,7 +95,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
         setupOverlayCallbacks()
 
-        selectTracker.setOnClickListener { selectTracker() }
+        selectTracker.setOnClickListener { trackerEngine.showTrackerDialog() }
         btnBluetooth.setOnClickListener { btHelper.showDevicesDialog { requestAppPermissions() } }
         btnScanToggle.setOnClickListener { toggle3DScanning() }
         btnExportPly.setOnClickListener {
@@ -202,23 +178,16 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
     override fun onResume() {
         super.onResume()
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            return
-        }
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
         if (arSession == null) {
             try {
-                when (ArCoreApk.getInstance().requestInstall(this, !installRequested)) {
-                    ArCoreApk.InstallStatus.INSTALL_REQUESTED -> {
-                        installRequested = true
-                        return
-                    }
-                    ArCoreApk.InstallStatus.INSTALLED -> {}
+                if (ArCoreApk.getInstance().requestInstall(this, !installRequested) == ArCoreApk.InstallStatus.INSTALL_REQUESTED) {
+                    installRequested = true
+                    return
                 }
                 arSession = Session(this).apply {
                     val config = Config(this)
-                    if (isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
-                        config.depthMode = Config.DepthMode.AUTOMATIC
-                    }
+                    if (isDepthModeSupported(Config.DepthMode.AUTOMATIC)) config.depthMode = Config.DepthMode.AUTOMATIC
                     config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                     configure(config)
                 }
@@ -230,8 +199,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         try {
             arSession?.resume()
             surfaceView.onResume()
-        } catch (e: Exception) {
-            e.printStackTrace()
+        } catch (_: Exception) {
         }
     }
 
@@ -244,11 +212,35 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     override fun onDestroy() {
         arSession?.close()
         arSession = null
-        imageGrab?.release()
-        tracker?.clear()
+        trackerEngine.release()
         btHelper.close()
         super.onDestroy()
     }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0.1f, 0.1f, 0.1f, 1.0f)
+        backgroundRenderer.createOnGlThread()
+    }
+
+    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
+        GLES20.glViewport(0, 0, width, height)
+        val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) display?.rotation ?: Surface.ROTATION_0
+        else @Suppress("DEPRECATION") (getSystemService(WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
+        arSession?.setDisplayGeometry(rotation, width, height)
+    }
+
+    override fun onDrawFrame(gl: GL10?) {
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+        val session = arSession ?: return
+        try {
+            session.setCameraTextureName(backgroundRenderer.textureId)
+            val frame = session.update()
+            backgroundRenderer.draw(frame)
+            if (frame.camera.trackingState != TrackingState.TRACKING) return
+
+            frameCounter++
+            if (isScanning3D && frameCounter % 3 == 0) {
+                plyExporter.collectFromFrame(frame)
+                runOnUiThread { updateStatusText() }
+            }
+
