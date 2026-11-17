@@ -237,3 +237,9 @@ class PlyExporter {
                     }
                 }
             }
+            Toast.makeText(context, "LiDAR 3D mapa uložená: $fileName", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(context, "Chyba exportu: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+}
