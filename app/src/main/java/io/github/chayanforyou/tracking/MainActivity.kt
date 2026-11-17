@@ -239,17 +239,13 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                       val frame = session.update()
             backgroundRenderer.draw(frame)
 
-            val isArTracking = (frame.camera.trackingState == TrackingState.TRACKING)
-            if (isArTracking) {
-                pointCloudRenderer.draw(frame.camera, plyExporter.pointCloudList)
-                frameCounter++
-                if (isScanning3D && frameCounter % 3 == 0) {
-                    plyExporter.collectFromFrame(frame)
-                    runOnUiThread { updateStatusText(true) }
-                }
-            } else if (isScanning3D) {
-                runOnUiThread { updateStatusText(false) }
-            }
+                    pointCloudRenderer.draw(frame.camera, plyExporter.pointCloudList)
+         frameCounter++
+         if (isScanning3D && frameCounter % 3 == 0) {
+             plyExporter.collectFromFrame(frame)
+             runOnUiThread { updateStatusText(true) }
+         }
+
 
             if (isTargetLocked) {
                 trackerEngine.processFrame(frame, pointStart, pointEnd, drawing == Drawing.DRAWING) {
