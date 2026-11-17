@@ -8,7 +8,7 @@ import android.provider.MediaStore
 import android.widget.Toast
 import com.google.ar.core.Frame
 import com.google.ar.core.Plane
-import java.nio.ByteOrder
+import com.google.ar.core.Point
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -21,20 +21,19 @@ class PlyExporter {
     var lastError: String = ""
 
     fun collectFromFrame(frame: Frame) {
-        val startCount = pointCloudList.size
+        val camPose = frame.camera.pose
 
-        // 1. Pokus o ARCore PointCloud (surové čítanie buffera)
+        // 1. Zber všetkých 3D záchytných bodov (ARCore PointCloud)
         try {
-            val camPose = frame.camera.pose
             frame.acquirePointCloud().use { pointCloud ->
                 val pointsBuffer = pointCloud.points
-                val count = pointsBuffer.remaining() / 4
-                for (i in 0 until count) {
-                    if (pointCloudList.size >= 300000) break
-                    val x = pointsBuffer.get()
-                    val y = pointsBuffer.get()
-                    val z = pointsBuffer.get()
-                    pointsBuffer.get() // ID / confidence
+                val totalFloats = pointsBuffer.limit()
+                var i = 0
+                while (i + 3 < totalFloats && pointCloudList.size < 300000) {
+                    val x = pointsBuffer.get(i)
+                    val y = pointsBuffer.get(i + 1)
+                    val z = pointsBuffer.get(i + 2)
+                    i += 4
 
                     if (x != 0f || y != 0f || z != 0f) {
                         val dx = x - camPose.tx()
@@ -46,22 +45,21 @@ class PlyExporter {
                 }
             }
         } catch (e: Exception) {
-            lastError = "PC: ${e.javaClass.simpleName}"
+            lastError = "PC:${e.javaClass.simpleName}"
         }
 
-        // 2. Zaručený zber zo všetkých nájdených 3D plôch a mriežky na obrazovke (HitTest)
-        if (pointCloudList.size == startCount) {
-            try {
-                val camPose = frame.camera.pose
-                // Skenujeme mriežku 5x5 bodov v strede obrazu pomocou ARCore HitTest
-                for (gx in 2..8 step 2) {
-                    for (gy in 2..8 step 2) {
-                        if (pointCloudList.size >= 300000) break
-                        val sx = gx * 100f
-                        val sy = gy * 150f
-                        val hits = frame.hitTest(sx, sy)
-                        if (hits.isNotEmpty()) {
-                            val pose = hits.first().hitPose
+        // 2. Zber bodov z detekovaných 3D plôch (stôl, podlaha, steny) a záchytných bodov cez HitTest
+        try {
+            for (gx in 1..9 step 2) {
+                for (gy in 1..9 step 2) {
+                    if (pointCloudList.size >= 300000) break
+                    val sx = gx * 100f
+                    val sy = gy * 150f
+                    val hits = frame.hitTest(sx, sy)
+                    for (hit in hits) {
+                        val trackable = hit.trackable
+                        if (trackable is Plane || trackable is Point) {
+                            val pose = hit.hitPose
                             val x = pose.tx()
                             val y = pose.ty()
                             val z = pose.tz()
@@ -70,12 +68,13 @@ class PlyExporter {
                             val dz = z - camPose.tz()
                             val dist = sqrt(dx * dx + dy * dy + dz * dz)
                             addColoredPoint(x, y, z, dist)
+                            break
                         }
                     }
                 }
-            } catch (e: Exception) {
-                lastError = "HT: ${e.javaClass.simpleName}"
             }
+        } catch (e: Exception) {
+            lastError = "HT:${e.javaClass.simpleName}"
         }
     }
 
@@ -95,7 +94,7 @@ class PlyExporter {
     fun exportToDownloads(context: Context) {
         if (pointCloudList.isEmpty()) {
             val errInfo = if (lastError.isNotEmpty()) " ($lastError)" else ""
-            Toast.makeText(context, "0 bodov$errInfo – mierte na stôl/podlahu so vzorom", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "0 bodov$errInfo – mierte na stôl/podlahu", Toast.LENGTH_LONG).show()
             return
         }
 
