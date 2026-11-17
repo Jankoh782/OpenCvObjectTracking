@@ -100,13 +100,17 @@ class ArTrackerEngine(
                     var posY = 0f
                     var posZ = getDepthAtScreenPoint(frame, centerX, centerY)
 
-                    val hits = frame.hitTest(centerX, centerY)
-                    if (hits.isNotEmpty()) {
-                        val pose = hits.first().hitPose
-                        posX = pose.tx()
-                        posY = pose.ty()
-                        if (posZ <= 0f) posZ = -pose.tz()
+                                       try {
+                        val hits = frame.hitTest(centerX, centerY)
+                        if (hits.isNotEmpty()) {
+                            val pose = hits.first().hitPose
+                            posX = pose.tx()
+                            posY = pose.ty()
+                            if (posZ <= 0f) posZ = -pose.tz()
+                        }
+                    } catch (_: Exception) {
                     }
+
 
                     val outX = ((centerX / trackingOverlay.width) * 240f).toInt().coerceIn(0, 240)
                     val outY = ((centerY / trackingOverlay.height) * 240f).toInt().coerceIn(0, 240)
