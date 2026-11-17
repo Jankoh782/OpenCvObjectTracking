@@ -236,22 +236,29 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         val session = arSession ?: return
         try {
             session.setCameraTextureName(backgroundRenderer.textureId)
-            val frame = session.update()
+                      val frame = session.update()
             backgroundRenderer.draw(frame)
-            pointCloudRenderer.draw(frame.camera, plyExporter.pointCloudList)
-            if (frame.camera.trackingState != TrackingState.TRACKING) return
 
-            frameCounter++
-            if (isScanning3D && frameCounter % 3 == 0) {
-                plyExporter.collectFromFrame(frame)
-                runOnUiThread { updateStatusText() }
+            val isArTracking = (frame.camera.trackingState == TrackingState.TRACKING)
+            if (isArTracking) {
+                pointCloudRenderer.draw(frame.camera, plyExporter.pointCloudList)
+                frameCounter++
+                if (isScanning3D && frameCounter % 3 == 0) {
+                    plyExporter.collectFromFrame(frame)
+                    runOnUiThread { updateStatusText(true) }
+                }
+            } else if (isScanning3D) {
+                runOnUiThread { updateStatusText(false) }
             }
+
             if (isTargetLocked) {
                 trackerEngine.processFrame(frame, pointStart, pointEnd, drawing == Drawing.DRAWING) {
                     drawing = Drawing.TRACKING
                 }
             } else {
                 trackerEngine.resetTracker()
+            }
+
             }
         } catch (_: Exception) {
         }
@@ -270,9 +277,10 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         updateStatusText()
     }
 
-    private fun updateStatusText() {
-        val btText = if (btHelper.isConnected) "Pripojené" else "Odpojené"
-        tvScanStatus.text = "3D Mapa (.ply): ${plyExporter.pointCloudList.size} bodov | BT: $btText"
-    }
+ private fun updateStatusText(arReady: Boolean = true) {
+     val btText = if (btHelper.isConnected) "Pripojené" else "Odpojené"
+     val arText = if (arReady) "" else " (Hýbte mobilom!)"
+     tvScanStatus.text = "3D Mapa: ${plyExporter.pointCloudList.size} bodov$arText | BT: $btText"
+ }
 }
 
