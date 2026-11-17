@@ -11,6 +11,7 @@ import com.google.ar.core.Frame
 import com.google.ar.core.Plane
 import com.google.ar.core.Point
 import com.google.ar.core.Pose
+import com.google.ar.core.TrackingState
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfByte
@@ -23,7 +24,6 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
-import kotlin.math.abs
 import kotlin.math.sqrt
 
 class PlyExporter {
@@ -35,45 +35,30 @@ class PlyExporter {
 
     fun collectFromFrame(frame: Frame) {
         val camPose = frame.camera.pose
+        val isTracking = (frame.camera.trackingState == TrackingState.TRACKING)
 
-        // 1. Klasický ARCore PointCloud + HitTest
-        try {
-            frame.acquirePointCloud().use { pointCloud ->
-                val pointsBuffer = pointCloud.points
-                val totalFloats = pointsBuffer.limit()
-                var i = 0
-                while (i + 3 < totalFloats && pointCloudList.size < 300000) {
-                    val x = pointsBuffer.get(i)
-                    val y = pointsBuffer.get(i + 1)
-                    val z = pointsBuffer.get(i + 2)
-                    i += 4
-                    if (x != 0f || y != 0f || z != 0f) {
-                        val dist = distance(camPose, x, y, z)
-                        addColoredPoint(x, y, z, dist)
-                    }
-                }
-            }
-        } catch (_: Exception) {
-        }
-
-        try {
-            for (gx in 1..9 step 2) {
-                for (gy in 1..9 step 2) {
-                    if (pointCloudList.size >= 300000) break
-                    val hits = frame.hitTest(gx * 100f, gy * 150f)
-                    for (hit in hits) {
-                        if (hit.trackable is Plane || hit.trackable is Point) {
-                            val p = hit.hitPose
-                            addColoredPoint(p.tx(), p.ty(), p.tz(), distance(camPose, p.tx(), p.ty(), p.tz()))
-                            break
+        // 1. Zber 3D bodov z detekovaných plôch (stôl, steny, podlaha) hustou mriežkou
+        if (isTracking) {
+            try {
+                for (gx in 1..9) {
+                    for (gy in 1..9) {
+                        if (pointCloudList.size >= 300000) break
+                        val hits = frame.hitTest(gx * 100f, gy * 160f)
+                        for (hit in hits) {
+                            if (hit.trackable is Plane || hit.trackable is Point) {
+                                val p = hit.hitPose
+                                // Plochy zafarbíme neutrálnou svetlosivou pre jasnú štruktúru miestnosti
+                                pointCloudList.add(floatArrayOf(p.tx(), p.ty(), p.tz(), 210f, 210f, 210f))
+                                break
+                            }
                         }
                     }
                 }
+            } catch (_: Exception) {
             }
-        } catch (_: Exception) {
         }
 
-        // 2. Zaručený 3D LiDAR výpočet z pohybu kamery (ARCore Pose + OpenCV Optical Flow)
+        // 2. Hustá 3D triangulácia s reálnym jasom z kamery (iba pri skutočnom posune mobilu)
         var camImage: Image? = null
         try {
             camImage = frame.acquireCameraImage()
@@ -84,13 +69,14 @@ class PlyExporter {
 
             if (pGray != null && pPose != null) {
                 val baseDist = distance(camPose, pPose.tx(), pPose.ty(), pPose.tz())
-                // Počítame 3D body, keď sa mobil pohol aspoň o 2 cm
-                if (baseDist > 0.02f && baseDist < 0.5f) {
+
+                // Počítame iba pri reálnom kroku/posune ruky (3 cm až 35 cm) - eliminuje modrý šum!
+                if (baseDist in 0.03f..0.35f) {
                     val corners = MatOfPoint()
-                    Imgproc.goodFeaturesToTrack(pGray, corners, 150, 0.02, 10.0)
+                    Imgproc.goodFeaturesToTrack(pGray, corners, 600, 0.01, 6.0)
                     val prevPts = MatOfPoint2f(*corners.toArray())
 
-                    if (prevPts.total() > 5) {
+                    if (prevPts.total() > 10) {
                         val nextPts = MatOfPoint2f()
                         val status = MatOfByte()
                         val err = MatOfFloat()
@@ -108,16 +94,37 @@ class PlyExporter {
 
                         for (k in pArr.indices) {
                             if (stArr.get(k).toInt() == 1 && pointCloudList.size < 300000) {
+                                val px = pArr.get(k).x.toInt().coerceIn(0, pGray.cols() - 1)
+                                val py = pArr.get(k).y.toInt().coerceIn(0, pGray.rows() - 1)
+
                                 val dxPx = nArr.get(k).x - pArr.get(k).x
                                 val dyPx = nArr.get(k).y - pArr.get(k).y
                                 val pixelShift = sqrt(dxPx * dxPx + dyPx * dyPx).toFloat()
 
-                                if (pixelShift > 1.5f) {
-                                    val depthZ = ((fx * baseDist) / pixelShift).coerceIn(0.3f, 4.5f)
-                                    val localX = ((pArr.get(k).x.toFloat() - cx) * depthZ) / fx
-                                    val localY = -((pArr.get(k).y.toFloat() - cy) * depthZ) / fx
-                                    val worldPt = pPose.transformPoint(floatArrayOf(localX, localY, -depthZ))
-                                    addColoredPoint(worldPt.get(0), worldPt.get(1), worldPt.get(2), depthZ)
+                                // Ignorujeme príliš malé posuny (šum v diaľke)
+                                if (pixelShift > 3.0f) {
+                                    val depthZ = (fx * baseDist) / pixelShift
+                                    // Berieme iba reálne predmety v miestnosti (0.25m až 3.5m)
+                                    if (depthZ in 0.25f..3.5f) {
+                                        val localX = ((px.toFloat() - cx) * depthZ) / fx
+                                        val localY = -((py.toFloat() - cy) * depthZ) / fx
+                                        val worldPt = pPose.transformPoint(floatArrayOf(localX, localY, -depthZ))
+
+                                        // Reálna farba/jas pixelu z kamery namiesto modrej!
+                                        val pixelVal = pGray.get(py, px)
+                                        val lum = if (pixelVal != null && pixelVal.isNotEmpty()) {
+                                            pixelVal.get(0).toFloat().coerceIn(0f, 255f)
+                                        } else {
+                                            180f
+                                        }
+
+                                        pointCloudList.add(
+                                            floatArrayOf(
+                                                worldPt.get(0), worldPt.get(1), worldPt.get(2),
+                                                lum, lum, lum
+                                            )
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -127,14 +134,24 @@ class PlyExporter {
                     }
                     corners.release()
                     prevPts.release()
+
+                    // Aktualizujeme referenčnú snímku až po úspešnom posune o 3 cm
+                    prevGray?.release()
+                    prevGray = currGray
+                    prevPose = camPose
+                } else if (baseDist > 0.35f) {
+                    prevGray?.release()
+                    prevGray = currGray
+                    prevPose = camPose
+                } else {
+                    currGray.release()
                 }
+            } else {
+                prevGray?.release()
+                prevGray = currGray
+                prevPose = camPose
             }
-
-                  prevGray?.release()
-            prevGray = currGray
-            prevPose = camPose
-     } catch (e: Exception) {
-
+        } catch (e: Exception) {
             lastError = e.javaClass.simpleName
         } finally {
             camImage?.close()
@@ -166,14 +183,6 @@ class PlyExporter {
         return sqrt(dx * dx + dy * dy + dz * dz)
     }
 
-    private fun addColoredPoint(x: Float, y: Float, z: Float, distMeters: Float) {
-        val normDist = ((distMeters - 0.3f) / 4.2f).coerceIn(0f, 1f)
-        val r = (1f - normDist) * 255f
-        val g = (1f - abs(normDist - 0.5f) * 2f) * 255f
-        val b = normDist * 255f
-        pointCloudList.add(floatArrayOf(x, y, z, r, g, b))
-    }
-
     fun clear() {
         pointCloudList.clear()
         prevGray?.release()
@@ -184,8 +193,7 @@ class PlyExporter {
 
     fun exportToDownloads(context: Context) {
         if (pointCloudList.isEmpty()) {
-            val errInfo = if (lastError.isNotEmpty()) " ($lastError)" else ""
-            Toast.makeText(context, "0 bodov$errInfo – pohnite mobilom do strany", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "0 bodov – urobte krok do strany s mobilom", Toast.LENGTH_LONG).show()
             return
         }
 
@@ -229,9 +237,3 @@ class PlyExporter {
                     }
                 }
             }
-            Toast.makeText(context, "LiDAR 3D mapa uložená: $fileName", Toast.LENGTH_LONG).show()
-        } catch (e: Exception) {
-            Toast.makeText(context, "Chyba exportu: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-}
