@@ -7,6 +7,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
 import com.google.ar.core.Frame
+import com.google.ar.core.Plane
 import java.nio.ByteOrder
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -17,69 +18,53 @@ import kotlin.math.sqrt
 
 class PlyExporter {
     val pointCloudList = CopyOnWriteArrayList<FloatArray>()
+    var lastError: String = ""
 
     fun collectFromFrame(frame: Frame) {
-        var addedFromDepth = false
+        val startCount = pointCloudList.size
+
+        // 1. Pokus o ARCore PointCloud (surové čítanie buffera)
         try {
-            frame.acquireDepthImage16Bits().use { depthImage ->
-                val dWidth = depthImage.width
-                val dHeight = depthImage.height
-                val plane = depthImage.planes.first()
-                val buffer = plane.buffer.order(ByteOrder.nativeOrder())
+            val camPose = frame.camera.pose
+            frame.acquirePointCloud().use { pointCloud ->
+                val pointsBuffer = pointCloud.points
+                val count = pointsBuffer.remaining() / 4
+                for (i in 0 until count) {
+                    if (pointCloudList.size >= 300000) break
+                    val x = pointsBuffer.get()
+                    val y = pointsBuffer.get()
+                    val z = pointsBuffer.get()
+                    pointsBuffer.get() // ID / confidence
 
-                val camera = frame.camera
-                val pose = camera.pose
-                val intrinsics = camera.imageIntrinsics
-                val focalLength = intrinsics.focalLength
-                val principalPoint = intrinsics.principalPoint
-                val imgDims = intrinsics.imageDimensions
-
-                val scaleX = dWidth.toFloat() / imgDims.get(0)
-                val scaleY = dHeight.toFloat() / imgDims.get(1)
-                val fx = focalLength.get(0) * scaleX
-                val fy = focalLength.get(1) * scaleY
-                val cx = principalPoint.get(0) * scaleX
-                val cy = principalPoint.get(1) * scaleY
-
-                val step = 4
-                for (y in 0 until dHeight step step) {
-                    for (x in 0 until dWidth step step) {
-                        if (pointCloudList.size >= 300000) return
-
-                        val byteIndex = y * plane.rowStride + x * plane.pixelStride
-                        val depthMm = buffer.getShort(byteIndex).toInt() and 0xFFFF
-                        val zMeters = depthMm / 1000f
-
-                        if (zMeters in 0.2f..5.0f) {
-                            val camX = (x - cx) * zMeters / fx
-                            val camY = -(y - cy) * zMeters / fy
-                            val camZ = -zMeters
-
-                            val worldPt = pose.transformPoint(floatArrayOf(camX, camY, camZ))
-                            addColoredPoint(worldPt.get(0), worldPt.get(1), worldPt.get(2), zMeters)
-                            addedFromDepth = true
-                        }
+                    if (x != 0f || y != 0f || z != 0f) {
+                        val dx = x - camPose.tx()
+                        val dy = y - camPose.ty()
+                        val dz = z - camPose.tz()
+                        val dist = sqrt(dx * dx + dy * dy + dz * dz)
+                        addColoredPoint(x, y, z, dist)
                     }
                 }
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            lastError = "PC: ${e.javaClass.simpleName}"
         }
 
-        // Univerzálny ARCore PointCloud bez filtra confidence
-        if (!addedFromDepth) {
+        // 2. Zaručený zber zo všetkých nájdených 3D plôch a mriežky na obrazovke (HitTest)
+        if (pointCloudList.size == startCount) {
             try {
                 val camPose = frame.camera.pose
-                frame.acquirePointCloud().use { pointCloud ->
-                    val pointsBuffer = pointCloud.points
-                    val totalFloats = pointsBuffer.limit()
-                    var i = 0
-                    while (i + 3 < totalFloats && pointCloudList.size < 300000) {
-                        val x = pointsBuffer.get(i)
-                        val y = pointsBuffer.get(i + 1)
-                        val z = pointsBuffer.get(i + 2)
-                        i += 4
-
-                        if (x != 0f || y != 0f || z != 0f) {
+                // Skenujeme mriežku 5x5 bodov v strede obrazu pomocou ARCore HitTest
+                for (gx in 2..8 step 2) {
+                    for (gy in 2..8 step 2) {
+                        if (pointCloudList.size >= 300000) break
+                        val sx = gx * 100f
+                        val sy = gy * 150f
+                        val hits = frame.hitTest(sx, sy)
+                        if (hits.isNotEmpty()) {
+                            val pose = hits.first().hitPose
+                            val x = pose.tx()
+                            val y = pose.ty()
+                            val z = pose.tz()
                             val dx = x - camPose.tx()
                             val dy = y - camPose.ty()
                             val dz = z - camPose.tz()
@@ -88,7 +73,8 @@ class PlyExporter {
                         }
                     }
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                lastError = "HT: ${e.javaClass.simpleName}"
             }
         }
     }
@@ -103,11 +89,13 @@ class PlyExporter {
 
     fun clear() {
         pointCloudList.clear()
+        lastError = ""
     }
 
     fun exportToDownloads(context: Context) {
         if (pointCloudList.isEmpty()) {
-            Toast.makeText(context, "Žiadne 3D body! Najprv kliknite na 'Štart 3D skenu'.", Toast.LENGTH_LONG).show()
+            val errInfo = if (lastError.isNotEmpty()) " ($lastError)" else ""
+            Toast.makeText(context, "0 bodov$errInfo – mierte na stôl/podlahu so vzorom", Toast.LENGTH_LONG).show()
             return
         }
 
