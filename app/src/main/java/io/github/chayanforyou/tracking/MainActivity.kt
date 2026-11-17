@@ -261,6 +261,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
                 } catch (_: Exception) {
         }
+         }
     
     private fun toggle3DScanning() {
         isScanning3D = !isScanning3D
