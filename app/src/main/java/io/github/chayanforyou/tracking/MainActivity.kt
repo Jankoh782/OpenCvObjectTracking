@@ -243,4 +243,33 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 plyExporter.collectFromFrame(frame)
                 runOnUiThread { updateStatusText() }
             }
+            if (isTargetLocked) {
+                trackerEngine.processFrame(frame, pointStart, pointEnd, drawing == Drawing.DRAWING) {
+                    drawing = Drawing.TRACKING
+                }
+            } else {
+                trackerEngine.resetTracker()
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun toggle3DScanning() {
+        isScanning3D = !isScanning3D
+        if (isScanning3D) {
+            plyExporter.clear()
+            btnScanToggle.text = "Stop 3D sken"
+            Toast.makeText(this, "Skenovanie spustené – hýbte mobilom", Toast.LENGTH_SHORT).show()
+        } else {
+            btnScanToggle.text = "Štart 3D skenu"
+            Toast.makeText(this, "Skenovanie zastavené (${plyExporter.pointCloudList.size} bodov)", Toast.LENGTH_SHORT).show()
+        }
+        updateStatusText()
+    }
+
+    private fun updateStatusText() {
+        val btText = if (btHelper.isConnected) "Pripojené" else "Odpojené"
+        tvScanStatus.text = "3D Mapa (.ply): ${plyExporter.pointCloudList.size} bodov | BT: $btText"
+    }
+}
 
