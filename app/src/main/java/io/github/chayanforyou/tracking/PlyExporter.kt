@@ -130,14 +130,11 @@ class PlyExporter {
                 }
             }
 
-            if (pPose == null || distance(camPose, pPose.tx(), pPose.ty(), pPose.tz()) > 0.03f) {
-                prevGray?.release()
-                prevGray = currGray
-                prevPose = camPose
-            } else {
-                currGray.release()
-            }
-        } catch (e: Exception) {
+                  prevGray?.release()
+            prevGray = currGray
+            prevPose = camPose
+     } catch (e: Exception) {
+
             lastError = e.javaClass.simpleName
         } finally {
             camImage?.close()
