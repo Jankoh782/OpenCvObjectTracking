@@ -259,11 +259,9 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 trackerEngine.resetTracker()
             }
 
-            }
-        } catch (_: Exception) {
+                } catch (_: Exception) {
         }
-    }
-
+    
     private fun toggle3DScanning() {
         isScanning3D = !isScanning3D
         if (isScanning3D) {
