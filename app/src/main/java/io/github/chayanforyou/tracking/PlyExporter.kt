@@ -2,6 +2,7 @@ package io.github.chayanforyou.tracking
 
 import android.content.ContentValues
 import android.content.Context
+import android.media.Image
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -9,6 +10,15 @@ import android.widget.Toast
 import com.google.ar.core.Frame
 import com.google.ar.core.Plane
 import com.google.ar.core.Point
+import com.google.ar.core.Pose
+import org.opencv.core.CvType
+import org.opencv.core.Mat
+import org.opencv.core.MatOfByte
+import org.opencv.core.MatOfFloat
+import org.opencv.core.MatOfPoint
+import org.opencv.core.MatOfPoint2f
+import org.opencv.imgproc.Imgproc
+import org.opencv.video.Video
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -20,10 +30,13 @@ class PlyExporter {
     val pointCloudList = CopyOnWriteArrayList<FloatArray>()
     var lastError: String = ""
 
+    private var prevGray: Mat? = null
+    private var prevPose: Pose? = null
+
     fun collectFromFrame(frame: Frame) {
         val camPose = frame.camera.pose
 
-        // 1. Zber všetkých 3D záchytných bodov (ARCore PointCloud)
+        // 1. Klasický ARCore PointCloud + HitTest
         try {
             frame.acquirePointCloud().use { pointCloud ->
                 val pointsBuffer = pointCloud.points
@@ -34,48 +47,126 @@ class PlyExporter {
                     val y = pointsBuffer.get(i + 1)
                     val z = pointsBuffer.get(i + 2)
                     i += 4
-
                     if (x != 0f || y != 0f || z != 0f) {
-                        val dx = x - camPose.tx()
-                        val dy = y - camPose.ty()
-                        val dz = z - camPose.tz()
-                        val dist = sqrt(dx * dx + dy * dy + dz * dz)
+                        val dist = distance(camPose, x, y, z)
                         addColoredPoint(x, y, z, dist)
                     }
                 }
             }
-        } catch (e: Exception) {
-            lastError = "PC:${e.javaClass.simpleName}"
+        } catch (_: Exception) {
         }
 
-        // 2. Zber bodov z detekovaných 3D plôch (stôl, podlaha, steny) a záchytných bodov cez HitTest
         try {
             for (gx in 1..9 step 2) {
                 for (gy in 1..9 step 2) {
                     if (pointCloudList.size >= 300000) break
-                    val sx = gx * 100f
-                    val sy = gy * 150f
-                    val hits = frame.hitTest(sx, sy)
+                    val hits = frame.hitTest(gx * 100f, gy * 150f)
                     for (hit in hits) {
-                        val trackable = hit.trackable
-                        if (trackable is Plane || trackable is Point) {
-                            val pose = hit.hitPose
-                            val x = pose.tx()
-                            val y = pose.ty()
-                            val z = pose.tz()
-                            val dx = x - camPose.tx()
-                            val dy = y - camPose.ty()
-                            val dz = z - camPose.tz()
-                            val dist = sqrt(dx * dx + dy * dy + dz * dz)
-                            addColoredPoint(x, y, z, dist)
+                        if (hit.trackable is Plane || hit.trackable is Point) {
+                            val p = hit.hitPose
+                            addColoredPoint(p.tx(), p.ty(), p.tz(), distance(camPose, p.tx(), p.ty(), p.tz()))
                             break
                         }
                     }
                 }
             }
-        } catch (e: Exception) {
-            lastError = "HT:${e.javaClass.simpleName}"
+        } catch (_: Exception) {
         }
+
+        // 2. Zaručený 3D LiDAR výpočet z pohybu kamery (ARCore Pose + OpenCV Optical Flow)
+        var camImage: Image? = null
+        try {
+            camImage = frame.acquireCameraImage()
+            val currGray = yuvToSmallGray(camImage)
+
+            val pGray = prevGray
+            val pPose = prevPose
+
+            if (pGray != null && pPose != null) {
+                val baseDist = distance(camPose, pPose.tx(), pPose.ty(), pPose.tz())
+                // Počítame 3D body, keď sa mobil pohol aspoň o 2 cm
+                if (baseDist > 0.02f && baseDist < 0.5f) {
+                    val corners = MatOfPoint()
+                    Imgproc.goodFeaturesToTrack(pGray, corners, 150, 0.02, 10.0)
+                    val prevPts = MatOfPoint2f(*corners.toArray())
+
+                    if (prevPts.total() > 5) {
+                        val nextPts = MatOfPoint2f()
+                        val status = MatOfByte()
+                        val err = MatOfFloat()
+                        Video.calcOpticalFlowPyrLK(pGray, currGray, prevPts, nextPts, status, err)
+
+                        val pArr = prevPts.toArray()
+                        val nArr = nextPts.toArray()
+                        val stArr = status.toArray()
+
+                        val intrinsics = frame.camera.imageIntrinsics
+                        val scale = 320f / intrinsics.imageDimensions.get(0).toFloat()
+                        val fx = intrinsics.focalLength.get(0) * scale
+                        val cx = intrinsics.principalPoint.get(0) * scale
+                        val cy = intrinsics.principalPoint.get(1) * scale
+
+                        for (k in pArr.indices) {
+                            if (stArr.get(k).toInt() == 1 && pointCloudList.size < 300000) {
+                                val dxPx = nArr.get(k).x - pArr.get(k).x
+                                val dyPx = nArr.get(k).y - pArr.get(k).y
+                                val pixelShift = sqrt(dxPx * dxPx + dyPx * dyPx).toFloat()
+
+                                if (pixelShift > 1.5f) {
+                                    val depthZ = ((fx * baseDist) / pixelShift).coerceIn(0.3f, 4.5f)
+                                    val localX = ((pArr.get(k).x.toFloat() - cx) * depthZ) / fx
+                                    val localY = -((pArr.get(k).y.toFloat() - cy) * depthZ) / fx
+                                    val worldPt = pPose.transformPoint(floatArrayOf(localX, localY, -depthZ))
+                                    addColoredPoint(worldPt.get(0), worldPt.get(1), worldPt.get(2), depthZ)
+                                }
+                            }
+                        }
+                        nextPts.release()
+                        status.release()
+                        err.release()
+                    }
+                    corners.release()
+                    prevPts.release()
+                }
+            }
+
+            if (pPose == null || distance(camPose, pPose.tx(), pPose.ty(), pPose.tz()) > 0.03f) {
+                prevGray?.release()
+                prevGray = currGray
+                prevPose = camPose
+            } else {
+                currGray.release()
+            }
+        } catch (e: Exception) {
+            lastError = e.javaClass.simpleName
+        } finally {
+            camImage?.close()
+        }
+    }
+
+    private fun yuvToSmallGray(image: Image): Mat {
+        val yPlane = image.planes.first()
+        val yBuffer = yPlane.buffer
+        val rowStride = yPlane.rowStride
+        val width = image.width
+        val height = image.height
+        val data = ByteArray(yBuffer.remaining())
+        yBuffer.get(data)
+        val fullMat = Mat(height, rowStride, CvType.CV_8UC1)
+        fullMat.put(0, 0, data)
+        val cropped = fullMat.submat(0, height, 0, width)
+        val small = Mat()
+        Imgproc.resize(cropped, small, org.opencv.core.Size(320.0, 240.0))
+        cropped.release()
+        fullMat.release()
+        return small
+    }
+
+    private fun distance(pose: Pose, x: Float, y: Float, z: Float): Float {
+        val dx = x - pose.tx()
+        val dy = y - pose.ty()
+        val dz = z - pose.tz()
+        return sqrt(dx * dx + dy * dy + dz * dz)
     }
 
     private fun addColoredPoint(x: Float, y: Float, z: Float, distMeters: Float) {
@@ -88,13 +179,16 @@ class PlyExporter {
 
     fun clear() {
         pointCloudList.clear()
+        prevGray?.release()
+        prevGray = null
+        prevPose = null
         lastError = ""
     }
 
     fun exportToDownloads(context: Context) {
         if (pointCloudList.isEmpty()) {
             val errInfo = if (lastError.isNotEmpty()) " ($lastError)" else ""
-            Toast.makeText(context, "0 bodov$errInfo – mierte na stôl/podlahu", Toast.LENGTH_LONG).show()
+            Toast.makeText(context, "0 bodov$errInfo – pohnite mobilom do strany", Toast.LENGTH_LONG).show()
             return
         }
 
