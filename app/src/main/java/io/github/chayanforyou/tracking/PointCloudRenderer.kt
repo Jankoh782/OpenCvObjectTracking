@@ -1,159 +1,110 @@
 package io.github.chayanforyou.tracking
 
-import android.content.ContentValues
-import android.content.Context
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
-import android.widget.Toast
-import com.google.ar.core.Frame
+import android.opengl.GLES20
+import android.opengl.Matrix
+import com.google.ar.core.Camera
+import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.concurrent.CopyOnWriteArrayList
-import kotlin.math.abs
-import kotlin.math.sqrt
+import java.nio.FloatBuffer
 
-class PlyExporter {
-    val pointCloudList = CopyOnWriteArrayList<FloatArray>()
+class PointCloudRenderer {
+    private var program = 0
+    private var positionAttrib = 0
+    private var colorAttrib = 0
+    private var mvpMatrixUniform = 0
+    private var pointSizeUniform = 0
 
-    fun collectFromFrame(frame: Frame) {
-        var addedFromDepth = false
-        try {
-            frame.acquireDepthImage16Bits().use { depthImage ->
-                val dWidth = depthImage.width
-                val dHeight = depthImage.height
-                val plane = depthImage.planes.first()
-                val buffer = plane.buffer.order(ByteOrder.nativeOrder())
+    private val viewMatrix = FloatArray(16)
+    private val projMatrix = FloatArray(16)
+    private val vpMatrix = FloatArray(16)
 
-                val camera = frame.camera
-                val pose = camera.pose
-                val intrinsics = camera.imageIntrinsics
-                val focalLength = intrinsics.focalLength
-                val principalPoint = intrinsics.principalPoint
-                val imgDims = intrinsics.imageDimensions
+    private val maxRenderPoints = 60000
+    private val vertexBuffer: FloatBuffer = ByteBuffer.allocateDirect(maxRenderPoints * 6 * 4)
+        .order(ByteOrder.nativeOrder())
+        .asFloatBuffer()
 
-                val scaleX = dWidth.toFloat() / imgDims.get(0)
-                val scaleY = dHeight.toFloat() / imgDims.get(1)
-                val fx = focalLength.get(0) * scaleX
-                val fy = focalLength.get(1) * scaleY
-                val cx = principalPoint.get(0) * scaleX
-                val cy = principalPoint.get(1) * scaleY
-
-                val step = 4
-                for (y in 0 until dHeight step step) {
-                    for (x in 0 until dWidth step step) {
-                        if (pointCloudList.size >= 300000) return
-
-                        val byteIndex = y * plane.rowStride + x * plane.pixelStride
-                        val depthMm = buffer.getShort(byteIndex).toInt() and 0xFFFF
-                        val zMeters = depthMm / 1000f
-
-                        if (zMeters in 0.2f..5.0f) {
-                            val camX = (x - cx) * zMeters / fx
-                            val camY = -(y - cy) * zMeters / fy
-                            val camZ = -zMeters
-
-                            val worldPt = pose.transformPoint(floatArrayOf(camX, camY, camZ))
-                            addColoredPoint(worldPt.get(0), worldPt.get(1), worldPt.get(2), zMeters)
-                            addedFromDepth = true
-                        }
-                    }
-                }
+    fun createOnGlThread() {
+        val vShader = loadShader(GLES20.GL_VERTEX_SHADER, """
+            uniform mat4 u_ModelViewProjection;
+            uniform float u_PointSize;
+            attribute vec3 a_Position;
+            attribute vec3 a_Color;
+            varying vec3 v_Color;
+            void main() {
+                gl_Position = u_ModelViewProjection * vec4(a_Position, 1.0);
+                gl_PointSize = u_PointSize;
+                v_Color = a_Color;
             }
-        } catch (_: Exception) {
-        }
+        """.trimIndent())
 
-        // Univerzálny ARCore PointCloud bez prísneho filtra (funguje na každom mobile)
-        if (!addedFromDepth) {
-            try {
-                val camPose = frame.camera.pose
-                frame.acquirePointCloud().use { pointCloud ->
-                    val pointsBuffer = pointCloud.points
-                    pointsBuffer.rewind()
-                    while (pointsBuffer.remaining() >= 4) {
-                        val x = pointsBuffer.get()
-                        val y = pointsBuffer.get()
-                        val z = pointsBuffer.get()
-                        val confidence = pointsBuffer.get()
-
-                        // Berieme všetky platné body (aj s nízkou confidence na hladkých povrchoch)
-                        if (confidence > 0.01f && pointCloudList.size < 300000) {
-                            val dx = x - camPose.tx()
-                            val dy = y - camPose.ty()
-                            val dz = z - camPose.tz()
-                            val dist = sqrt(dx * dx + dy * dy + dz * dz)
-                            addColoredPoint(x, y, z, dist)
-                        }
-                    }
-                }
-            } catch (_: Exception) {
+        val fShader = loadShader(GLES20.GL_FRAGMENT_SHADER, """
+            precision mediump float;
+            varying vec3 v_Color;
+            void main() {
+                gl_FragColor = vec4(v_Color, 0.85);
             }
+        """.trimIndent())
+
+        program = GLES20.glCreateProgram().also {
+            GLES20.glAttachShader(it, vShader)
+            GLES20.glAttachShader(it, fShader)
+            GLES20.glLinkProgram(it)
+            positionAttrib = GLES20.glGetAttribLocation(it, "a_Position")
+            colorAttrib = GLES20.glGetAttribLocation(it, "a_Color")
+            mvpMatrixUniform = GLES20.glGetUniformLocation(it, "u_ModelViewProjection")
+            pointSizeUniform = GLES20.glGetUniformLocation(it, "u_PointSize")
         }
     }
 
-    private fun addColoredPoint(x: Float, y: Float, z: Float, distMeters: Float) {
-        val normDist = ((distMeters - 0.3f) / 4.2f).coerceIn(0f, 1f)
-        val r = (1f - normDist) * 255f
-        val g = (1f - abs(normDist - 0.5f) * 2f) * 255f
-        val b = normDist * 255f
-        pointCloudList.add(floatArrayOf(x, y, z, r, g, b))
-    }
+    fun draw(camera: Camera, points: List<FloatArray>) {
+        if (points.isEmpty()) return
 
-    fun clear() {
-        pointCloudList.clear()
-    }
+        camera.getViewMatrix(viewMatrix, 0)
+        camera.getProjectionMatrix(projMatrix, 0, 0.1f, 100.0f)
+        Matrix.multiplyMM(vpMatrix, 0, projMatrix, 0, viewMatrix, 0)
 
-    fun exportToDownloads(context: Context) {
-        if (pointCloudList.isEmpty()) {
-            Toast.makeText(context, "Žiadne 3D body! Najprv kliknite na 'Štart 3D skenu'.", Toast.LENGTH_LONG).show()
-            return
+        vertexBuffer.clear()
+        val total = points.size
+        val step = if (total > maxRenderPoints) (total / maxRenderPoints) + 1 else 1
+        var count = 0
+
+        var i = 0
+        while (i < total && count < maxRenderPoints) {
+            val pt = points.get(i)
+            vertexBuffer.put(pt.get(0))
+            vertexBuffer.put(pt.get(1))
+            vertexBuffer.put(pt.get(2))
+            vertexBuffer.put(pt.get(3) / 255f)
+            vertexBuffer.put(pt.get(4) / 255f)
+            vertexBuffer.put(pt.get(5) / 255f)
+            count++
+            i += step
         }
+        vertexBuffer.flip()
 
-        val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val fileName = "LiDAR_3D_Map_$timeStamp.ply"
+        GLES20.glUseProgram(program)
+        GLES20.glUniformMatrix4fv(mvpMatrixUniform, 1, false, vpMatrix, 0)
+        GLES20.glUniform1f(pointSizeUniform, 12.0f)
 
-        try {
-            val sb = StringBuilder()
-            sb.append("ply\n")
-            sb.append("format ascii 1.0\n")
-            sb.append("element vertex ${pointCloudList.size}\n")
-            sb.append("property float x\n")
-            sb.append("property float y\n")
-            sb.append("property float z\n")
-            sb.append("property uchar red\n")
-            sb.append("property uchar green\n")
-            sb.append("property uchar blue\n")
-            sb.append("end_header\n")
+        val stride = 6 * 4
+        vertexBuffer.position(0)
+        GLES20.glVertexAttribPointer(positionAttrib, 3, GLES20.GL_FLOAT, false, stride, vertexBuffer)
+        GLES20.glEnableVertexAttribArray(positionAttrib)
 
-            for (pt in pointCloudList) {
-                sb.append(
-                    String.format(
-                        Locale.US,
-                        "%.4f %.4f %.4f %d %d %d\n",
-                        pt.get(0), pt.get(1), pt.get(2),
-                        pt.get(3).toInt(), pt.get(4).toInt(), pt.get(5).toInt()
-                    )
-                )
-            }
+        vertexBuffer.position(3)
+        GLES20.glVertexAttribPointer(colorAttrib, 3, GLES20.GL_FLOAT, false, stride, vertexBuffer)
+        GLES20.glEnableVertexAttribArray(colorAttrib)
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val values = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                    put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
-                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                }
-                val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                uri?.let {
-                    context.contentResolver.openOutputStream(it)?.use { out ->
-                        out.write(sb.toString().toByteArray())
-                    }
-                }
-            }
-            Toast.makeText(context, "LiDAR 3D mapa uložená: $fileName", Toast.LENGTH_LONG).show()
-        } catch (e: Exception) {
-            Toast.makeText(context, "Chyba exportu: ${e.message}", Toast.LENGTH_LONG).show()
+        GLES20.glDrawArrays(GLES20.GL_POINTS, 0, count)
+
+        GLES20.glDisableVertexAttribArray(positionAttrib)
+        GLES20.glDisableVertexAttribArray(colorAttrib)
+    }
+
+    private fun loadShader(type: Int, code: String): Int {
+        return GLES20.glCreateShader(type).also { shader ->
+            GLES20.glShaderSource(shader, code)
+            GLES20.glCompileShader(shader)
         }
     }
 }
