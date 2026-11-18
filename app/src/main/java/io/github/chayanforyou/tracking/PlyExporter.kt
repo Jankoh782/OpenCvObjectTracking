@@ -245,3 +245,13 @@ class PlyExporter {
                     put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
                     put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                 }
+                context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)?.let { uri ->
+                    context.contentResolver.openOutputStream(uri)?.use { it.write(sb.toString().toByteArray()) }
+                }
+            }
+            Toast.makeText(context, "Uložené ($debugInfo): $fileName", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(context, "Chyba: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+}
