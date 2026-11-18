@@ -86,7 +86,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             btnBluetooth.text = if (connected) "BT: $deviceName" else "Pripojiť BT (Arduino)"
             updateStatusText()
         }
-        trackerEngine = ArTrackerEngine(this, trackingOverlay, tvCoordinates, btHelper)
+        trackerEngine = ArTrackerEngine(this, trackingOverlay, tvCoordinates, btHelper, plyExporter)
 
         surfaceView.preserveEGLContextOnPause = true
         surfaceView.setEGLContextClientVersion(2)
