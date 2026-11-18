@@ -8,16 +8,13 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
 import com.google.ar.core.Frame
-import com.google.ar.core.Plane
-import com.google.ar.core.Point
 import com.google.ar.core.Pose
-import com.google.ar.core.TrackingState
 import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.MatOfByte
 import org.opencv.core.MatOfFloat
-import org.opencv.core.MatOfPoint
 import org.opencv.core.MatOfPoint2f
+import org.opencv.core.Point
 import org.opencv.imgproc.Imgproc
 import org.opencv.video.Video
 import java.text.SimpleDateFormat
@@ -28,7 +25,8 @@ import kotlin.math.sqrt
 
 class PlyExporter {
     val pointCloudList = CopyOnWriteArrayList<FloatArray>()
-    var debugInfo: String = "Čakám na snímku"
+    private val facesList = CopyOnWriteArrayList<IntArray>()
+    var debugInfo: String = "Pripravený"
 
     private var prevGray: Mat? = null
     private var prevPose: Pose? = null
@@ -36,27 +34,6 @@ class PlyExporter {
 
     fun collectFromFrame(frame: Frame) {
         val camPose = frame.camera.pose
-        val state = frame.camera.trackingState
-
-        if (state == TrackingState.TRACKING) {
-            try {
-                for (gx in 1..9 step 2) {
-                    for (gy in 1..9 step 2) {
-                        if (pointCloudList.size >= 300000) break
-                        val hits = frame.hitTest(gx * 100f, gy * 160f)
-                        for (hit in hits) {
-                            if (hit.trackable is Plane || hit.trackable is Point) {
-                                val p = hit.hitPose
-                                pointCloudList.add(floatArrayOf(p.tx(), p.ty(), p.tz(), 220f, 220f, 220f))
-                                break
-                            }
-                        }
-                    }
-                }
-            } catch (_: Exception) {
-            }
-        }
-
         var camImage: Image? = null
         try {
             camImage = frame.acquireCameraImage()
@@ -66,76 +43,112 @@ class PlyExporter {
 
             if (pGray != null && pPose != null) {
                 val realDist = distance(camPose, pPose.tx(), pPose.ty(), pPose.tz())
-                val useVirtual = (realDist < 0.01f)
+                val useVirtual = (realDist < 0.015f)
                 val baseDist = if (useVirtual) 0.04f else realDist
 
-                if (baseDist <= 0.4f) {
-                    val corners = MatOfPoint()
-                    Imgproc.goodFeaturesToTrack(pGray, corners, 400, 0.015, 8.0)
-                    val prevPts = MatOfPoint2f(*corners.toArray())
+                if (baseDist <= 0.45f) {
+                    val cols = 32
+                    val rows = 24
+                    val stepX = 320f / (cols + 1)
+                    val stepY = 240f / (rows + 1)
 
-                    if (prevPts.total() > 5) {
-                        val nextPts = MatOfPoint2f()
-                        val status = MatOfByte()
-                        val err = MatOfFloat()
-                        Video.calcOpticalFlowPyrLK(pGray, currGray, prevPts, nextPts, status, err)
+                    val gridPoints = ArrayList<Point>(cols * rows)
+                    for (r in 1..rows) {
+                        for (c in 1..cols) {
+                            gridPoints.add(Point((c * stepX).toDouble(), (r * stepY).toDouble()))
+                        }
+                    }
 
-                        val pArr = prevPts.toArray()
-                        val nArr = nextPts.toArray()
-                        val stArr = status.toArray()
+                    val prevPts = MatOfPoint2f(*gridPoints.toTypedArray())
+                    val nextPts = MatOfPoint2f()
+                    val status = MatOfByte()
+                    val err = MatOfFloat()
 
-                        val intrinsics = frame.camera.imageIntrinsics
-                        val scale = 320f / intrinsics.imageDimensions.get(0).toFloat()
-                        val fx = intrinsics.focalLength.get(0) * scale
-                        val cx = intrinsics.principalPoint.get(0) * scale
-                        val cy = intrinsics.principalPoint.get(1) * scale
+                    Video.calcOpticalFlowPyrLK(pGray, currGray, prevPts, nextPts, status, err)
 
-                        var addedNow = 0
-                        for (k in pArr.indices) {
-                            if (stArr.get(k).toInt() == 1 && pointCloudList.size < 300000) {
-                                val px = pArr.get(k).x.toInt().coerceIn(0, pGray.cols() - 1)
-                                val py = pArr.get(k).y.toInt().coerceIn(0, pGray.rows() - 1)
-                                val dxPx = nArr.get(k).x - pArr.get(k).x
-                                val dyPx = nArr.get(k).y - pArr.get(k).y
-                                val pixelShift = sqrt(dxPx * dxPx + dyPx * dyPx).toFloat()
+                    val pArr = prevPts.toArray()
+                    val nArr = nextPts.toArray()
+                    val stArr = status.toArray()
 
-                                if (pixelShift > 2.5f) {
-                                    val depthZ = ((fx * baseDist) / pixelShift).coerceIn(0.3f, 3.0f)
-                                    val localX = ((px.toFloat() - cx) * depthZ) / fx
-                                    val localY = -((py.toFloat() - cy) * depthZ) / fx
+                    val intrinsics = frame.camera.imageIntrinsics
+                    val scale = 320f / intrinsics.imageDimensions.get(0).toFloat()
+                    val fx = intrinsics.focalLength.get(0) * scale
+                    val cx = intrinsics.principalPoint.get(0) * scale
+                    val cy = intrinsics.principalPoint.get(1) * scale
 
-                                    val wx: Float
-                                    val wy: Float
-                                    val wz: Float
-                                    if (!useVirtual) {
-                                        val wp = pPose.transformPoint(floatArrayOf(localX, localY, -depthZ))
-                                        wx = wp.get(0)
-                                        wy = wp.get(1)
-                                        wz = wp.get(2)
-                                    } else {
-                                        wx = localX
-                                        wy = localY
-                                        wz = -depthZ - virtualStepZ
-                                    }
+                    val gridIndices = IntArray(cols * rows) { -1 }
+                    var addedNow = 0
 
-                                    val pixelVal = pGray.get(py, px)
-                                    val lum = if (pixelVal != null && pixelVal.isNotEmpty()) {
-                                        pixelVal.get(0).toFloat().coerceIn(30f, 255f)
-                                    } else 180f
+                    for (idx in pArr.indices) {
+                        if (stArr.get(idx).toInt() == 1 && pointCloudList.size < 300000) {
+                            val px = pArr.get(idx).x.toInt().coerceIn(0, pGray.cols() - 1)
+                            val py = pArr.get(idx).y.toInt().coerceIn(0, pGray.rows() - 1)
+                            val dxPx = nArr.get(idx).x - pArr.get(idx).x
+                            val dyPx = nArr.get(idx).y - pArr.get(idx).y
+                            val pixelShift = sqrt(dxPx * dxPx + dyPx * dyPx).toFloat()
 
-                                    pointCloudList.add(floatArrayOf(wx, wy, wz, lum, lum, lum))
-                                    addedNow++
+                            val depthZ = if (pixelShift > 1.2f) {
+                                ((fx * baseDist) / pixelShift).coerceIn(0.4f, 3.5f)
+                            } else {
+                                2.5f
+                            }
+
+                            val localX = ((px.toFloat() - cx) * depthZ) / fx
+                            val localY = -((py.toFloat() - cy) * depthZ) / fx
+
+                            val wx: Float
+                            val wy: Float
+                            val wz: Float
+                            if (!useVirtual) {
+                                val wp = pPose.transformPoint(floatArrayOf(localX, localY, -depthZ))
+                                wx = wp.get(0)
+                                wy = wp.get(1)
+                                wz = wp.get(2)
+                            } else {
+                                wx = localX
+                                wy = localY
+                                wz = -depthZ - virtualStepZ
+                            }
+
+                            val pixelVal = pGray.get(py, px)
+                            val lum = if (pixelVal != null && pixelVal.isNotEmpty()) {
+                                pixelVal.get(0).toFloat().coerceIn(30f, 255f)
+                            } else 180f
+
+                            gridIndices[idx] = pointCloudList.size
+                            pointCloudList.add(floatArrayOf(wx, wy, wz, lum, lum, lum))
+                            addedNow++
+                        }
+                    }
+
+                    // Spojenie susedných bodov mriežky do súvislých 3D plôch
+                    for (r in 0 until rows - 1) {
+                        for (c in 0 until cols - 1) {
+                            val i00 = gridIndices[r * cols + c]
+                            val i10 = gridIndices[r * cols + (c + 1)]
+                            val i01 = gridIndices[(r + 1) * cols + c]
+                            val i11 = gridIndices[(r + 1) * cols + (c + 1)]
+
+                            if (i00 != -1 && i10 != -1 && i01 != -1) {
+                                if (isClose(i00, i10) && isClose(i00, i01)) {
+                                    facesList.add(intArrayOf(i00, i01, i10))
+                                }
+                            }
+                            if (i10 != -1 && i01 != -1 && i11 != -1) {
+                                if (isClose(i11, i10) && isClose(i11, i01)) {
+                                    facesList.add(intArrayOf(i10, i01, i11))
                                 }
                             }
                         }
-                        if (addedNow > 0 && useVirtual) virtualStepZ += 0.03f
-                        debugInfo = "AR:$state, d=${String.format(Locale.US, "%.2f", realDist)}, +$addedNow"
-                        nextPts.release()
-                        status.release()
-                        err.release()
                     }
-                    corners.release()
+
+                    if (addedNow > 0 && useVirtual) virtualStepZ += 0.03f
+                    debugInfo = "Plochy: ${facesList.size}, Body: ${pointCloudList.size}"
+
                     prevPts.release()
+                    nextPts.release()
+                    status.release()
+                    err.release()
                 }
             }
 
@@ -147,6 +160,15 @@ class PlyExporter {
         } finally {
             camImage?.close()
         }
+    }
+
+    private fun isClose(idxA: Int, idxB: Int): Boolean {
+        val a = pointCloudList.get(idxA)
+        val b = pointCloudList.get(idxB)
+        val dx = a.get(0) - b.get(0)
+        val dy = a.get(1) - b.get(1)
+        val dz = a.get(2) - b.get(2)
+        return (dx * dx + dy * dy + dz * dz) < 0.16f // Max 40 cm medzera medzi susednými bodmi
     }
 
     private fun yuvToSmallGray(image: Image): Mat {
@@ -173,33 +195,32 @@ class PlyExporter {
 
     fun clear() {
         pointCloudList.clear()
+        facesList.clear()
         prevGray?.release()
         prevGray = null
         prevPose = null
         virtualStepZ = 0f
     }
 
-     fun exportToDownloads(context: Context) {
+    fun exportToDownloads(context: Context) {
         if (pointCloudList.isEmpty()) {
             Toast.makeText(context, "0 bodov ($debugInfo)", Toast.LENGTH_LONG).show()
             return
         }
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-        val fileName = "LiDAR_3D_Map_$timeStamp.ply"
+        val fileName = "Room_3D_Scan_$timeStamp.ply"
         try {
-            val vCount = pointCloudList.size
-            val fCount = vCount / 3
             val sb = StringBuilder()
             sb.append("ply\n")
             sb.append("format ascii 1.0\n")
-            sb.append("element vertex $vCount\n")
+            sb.append("element vertex ${pointCloudList.size}\n")
             sb.append("property float x\n")
             sb.append("property float y\n")
             sb.append("property float z\n")
             sb.append("property uchar red\n")
             sb.append("property uchar green\n")
             sb.append("property uchar blue\n")
-            sb.append("element face $fCount\n")
+            sb.append("element face ${facesList.size}\n")
             sb.append("property list uchar int vertex_indices\n")
             sb.append("end_header\n")
 
@@ -214,10 +235,8 @@ class PlyExporter {
                 )
             }
 
-            var i = 0
-            while (i + 2 < vCount) {
-                sb.append("3 $i ${i + 1} ${i + 2}\n")
-                i += 3
+            for (f in facesList) {
+                sb.append("3 ${f.get(0)} ${f.get(1)} ${f.get(2)}\n")
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -226,14 +245,3 @@ class PlyExporter {
                     put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
                     put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                 }
-                context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)?.let { uri ->
-                    context.contentResolver.openOutputStream(uri)?.use { it.write(sb.toString().toByteArray()) }
-                }
-            }
-            Toast.makeText(context, "Uložené ($debugInfo): $fileName", Toast.LENGTH_LONG).show()
-        } catch (e: Exception) {
-            Toast.makeText(context, "Chyba: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-}
-
