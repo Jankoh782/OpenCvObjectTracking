@@ -116,7 +116,6 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         }
         permissionLauncher.launch(perms.toTypedArray())
     }
-
     @SuppressLint("ClickableViewAccessibility")
     private fun setupOverlayCallbacks() {
         trackingOverlay.addCallback(object : OverlayView.DrawCallback {
@@ -131,25 +130,28 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                         pointStart.x.toFloat(), pointStart.y.toFloat(),
                         pointEnd.x.toFloat(), pointEnd.y.toFloat(), paint
                     )
-                    if (drawing == Drawing.TRACKING) {
-                        val cx = (pointStart.x + pointEnd.x) / 2f
-                        val cy = (pointStart.y + pointEnd.y) / 2f
-                        canvas.drawLine(cx, 0f, cx, trackingOverlay.height.toFloat(), paint)
-                        canvas.drawLine(0f, cy, trackingOverlay.width.toFloat(), cy, paint)
-                    }
                 }
             }
         })
+
+        var lastTapTime = 0L
 
         trackingOverlay.setOnTouchListener { _, event ->
             val x = event.x.toInt()
             val y = event.y.toInt()
             when (event.action and MotionEvent.ACTION_MASK) {
-                MotionEvent.ACTION_DOWN -> if (!isTargetLocked) {
-                    drawing = Drawing.DRAWING
-                    pointStart.set(x, y)
-                    pointEnd.set(x, y)
-                    trackingOverlay.invalidate()
+                MotionEvent.ACTION_DOWN -> {
+                    val now = System.currentTimeMillis()
+                    if (isTargetLocked && (now - lastTapTime < 350)) {
+                        // Dvojité ťuknutie jedným prstom zruší výber
+                        cancelTargetSelection()
+                    } else if (!isTargetLocked) {
+                        drawing = Drawing.DRAWING
+                        pointStart.set(x, y)
+                        pointEnd.set(x, y)
+                        trackingOverlay.invalidate()
+                    }
+                    lastTapTime = now
                 }
                 MotionEvent.ACTION_MOVE -> if (!isTargetLocked) {
                     pointEnd.set(x, y)
@@ -160,22 +162,36 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     trackingOverlay.invalidate()
                 }
                 MotionEvent.ACTION_POINTER_DOWN -> {
-                    isTargetLocked = !isTargetLocked
-                    drawing = Drawing.DRAWING
-                    trackingOverlay.invalidate()
-                    if (isTargetLocked) {
+                    if (!isTargetLocked) {
+                        // Zamknutie cieľa druhým prstom
+                        isTargetLocked = true
+                        drawing = Drawing.DRAWING
+                        trackingOverlay.invalidate()
                         selectTracker.hide()
-                        Toast.makeText(this, "Cieľ ZAMKNUTÝ (2 prsty = odomknúť)", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(this, "Cieľ ZAMKNUTÝ (2 prsty / dvojklik = zrušiť)", Toast.LENGTH_SHORT).show()
                     } else {
-                        selectTracker.show()
-                        tvCoordinates.text = "3D Poloha: Čakám na výber objektu..."
-                        Toast.makeText(this, "Cieľ ODOMKNUTÝ", Toast.LENGTH_SHORT).show()
+                        // Zrušenie výberu druhým prstom
+                        cancelTargetSelection()
                     }
                 }
             }
             true
         }
     }
+
+    private fun cancelTargetSelection() {
+        isTargetLocked = false
+        drawing = Drawing.CLEAR
+        pointStart.set(0, 0)
+        pointEnd.set(0, 0)
+        trackingOverlay.invalidate()
+        selectTracker.show()
+        tvCoordinates.text = "3D Poloha: Výber zrušený"
+        // Pošleme robotu príkaz na zastavenie (stred X=120, plocha A=90 -> stopMotors())
+        btHelper.sendCoordinates(120, 120, 90)
+        Toast.makeText(this, "Výber ZRUŠENÝ", Toast.LENGTH_SHORT).show()
+    }
+
 
     override fun onResume() {
         super.onResume()
