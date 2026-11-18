@@ -142,7 +142,6 @@ class ArTrackerEngine(
                         var posX = 0f
                         var posY = 0f
                         var posZ = 0f
-                        var hasWorldPose = false
 
                         try {
                             val hits = frame.hitTest(centerX, centerY)
@@ -151,16 +150,28 @@ class ArTrackerEngine(
                                 posX = pose.tx()
                                 posY = pose.ty()
                                 posZ = pose.tz()
-                                hasWorldPose = true
                             }
                         } catch (_: Exception) {
                         }
 
+                        // Ak ARCore HitTest ešte nenašiel rovinu, vypočítame 3D pozíciu priamo z rámčeka
+                        if (posX == 0f && posY == 0f && posZ == 0f) {
+                            val boxW = abs(pointEnd.x - pointStart.x).toFloat().coerceAtLeast(20f)
+                            val estDist = (250f / boxW).coerceIn(0.4f, 3.0f)
+                            val normX = (centerX / trackingOverlay.width) - 0.5f
+                            val normY = 0.5f - (centerY / trackingOverlay.height)
+                            posX = normX * estDist
+                            posY = normY * estDist
+                            posZ = -estDist
+                        }
+
+                        // Zápis jasne červeného 3D ihlana na mapu (max 2x za sekundu)
                         val now = System.currentTimeMillis()
-                        if (hasWorldPose && (now - lastMarkerTime > 500)) {
+                        if (now - lastMarkerTime > 500) {
                             lastMarkerTime = now
                             plyExporter.addTargetMarker(posX, posY, posZ)
                         }
+
 
                         val outX = ((centerX / trackingOverlay.width) * 240f).toInt().coerceIn(0, 240)
                         val outY = ((centerY / trackingOverlay.height) * 240f).toInt().coerceIn(0, 240)
