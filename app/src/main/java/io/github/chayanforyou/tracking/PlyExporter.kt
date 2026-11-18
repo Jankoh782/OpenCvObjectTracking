@@ -179,7 +179,7 @@ class PlyExporter {
         virtualStepZ = 0f
     }
 
-    fun exportToDownloads(context: Context) {
+     fun exportToDownloads(context: Context) {
         if (pointCloudList.isEmpty()) {
             Toast.makeText(context, "0 bodov ($debugInfo)", Toast.LENGTH_LONG).show()
             return
@@ -187,10 +187,39 @@ class PlyExporter {
         val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val fileName = "LiDAR_3D_Map_$timeStamp.ply"
         try {
-            val sb = StringBuilder("ply\nformat ascii 1.0\nelement vertex ${pointCloudList.size}\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n")
+            val vCount = pointCloudList.size
+            val fCount = vCount / 3
+            val sb = StringBuilder()
+            sb.append("ply\n")
+            sb.append("format ascii 1.0\n")
+            sb.append("element vertex $vCount\n")
+            sb.append("property float x\n")
+            sb.append("property float y\n")
+            sb.append("property float z\n")
+            sb.append("property uchar red\n")
+            sb.append("property uchar green\n")
+            sb.append("property uchar blue\n")
+            sb.append("element face $fCount\n")
+            sb.append("property list uchar int vertex_indices\n")
+            sb.append("end_header\n")
+
             for (pt in pointCloudList) {
-                sb.append(String.format(Locale.US, "%.4f %.4f %.4f %d %d %d\n", pt.get(0), pt.get(1), pt.get(2), pt.get(3).toInt(), pt.get(4).toInt(), pt.get(5).toInt()))
+                sb.append(
+                    String.format(
+                        Locale.US,
+                        "%.4f %.4f %.4f %d %d %d\n",
+                        pt.get(0), pt.get(1), pt.get(2),
+                        pt.get(3).toInt(), pt.get(4).toInt(), pt.get(5).toInt()
+                    )
+                )
             }
+
+            var i = 0
+            while (i + 2 < vCount) {
+                sb.append("3 $i ${i + 1} ${i + 2}\n")
+                i += 3
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 val values = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, fileName)
@@ -207,3 +236,4 @@ class PlyExporter {
         }
     }
 }
+
