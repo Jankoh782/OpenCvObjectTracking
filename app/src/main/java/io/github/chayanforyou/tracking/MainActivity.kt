@@ -118,7 +118,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     }
     @SuppressLint("ClickableViewAccessibility")
     private fun setupOverlayCallbacks() {
-        trackingOverlay.addCallback(object : OverlayView.DrawCallback {
+               trackingOverlay.addCallback(object : OverlayView.DrawCallback {
             override fun drawCallback(canvas: Canvas) {
                 if (drawing != Drawing.CLEAR) {
                     val paint = Paint().apply {
@@ -130,9 +130,20 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                         pointStart.x.toFloat(), pointStart.y.toFloat(),
                         pointEnd.x.toFloat(), pointEnd.y.toFloat(), paint
                     )
+
+                    if (drawing == Drawing.TRACKING && pointEnd.x > pointStart.x) {
+                        val cx = (pointStart.x + pointEnd.x) / 2f
+                        val cy = (pointStart.y + pointEnd.y) / 2f
+                        val redPaint = Paint().apply {
+                            color = Color.RED
+                            style = Paint.Style.FILL
+                        }
+                        canvas.drawCircle(cx, cy, 18f, redPaint)
+                    }
                 }
             }
         })
+
 
         var lastTapTime = 0L
 
