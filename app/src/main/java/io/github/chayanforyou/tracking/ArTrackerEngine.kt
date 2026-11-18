@@ -6,7 +6,6 @@ import android.media.Image
 import android.widget.TextView
 import android.widget.Toast
 import com.google.ar.core.Frame
-import com.google.ar.core.Plane
 import org.opencv.core.Core
 import org.opencv.core.CvType
 import org.opencv.core.Mat
@@ -63,7 +62,6 @@ class ArTrackerEngine(
             val mat = yuvToGrayMat(camImage)
             Core.transpose(mat, mat)
             Core.flip(mat, mat, 1)
-            // Vyššie rozlíšenie (480x640) pre presné čítanie potlače a detailov
             Imgproc.resize(mat, mat, org.opencv.core.Size(480.0, 640.0))
 
             if (isInitDrawing) {
@@ -109,14 +107,10 @@ class ArTrackerEngine(
                     val matches = MatOfDMatch()
                     matcher.match(tDesc, sceneDesc, matches)
 
-                    val matchList = matches.toList()
-                    // Filtrujeme len kvalitné zhody (vzdialenosť deskriptorov < 45)
-                    val goodMatches = matchList.filter { it.distance < 45f }
+                    val goodMatches = matches.toList().filter { it.distance < 45f }
 
                     if (goodMatches.size >= 8) {
                         val kpArray = sceneKp.toArray()
-                        var sumX = 0.0
-                        var sumY = 0.0
                         var minMatchX = mat.cols().toDouble()
                         var minMatchY = mat.rows().toDouble()
                         var maxMatchX = 0.0
@@ -124,15 +118,12 @@ class ArTrackerEngine(
 
                         for (m in goodMatches) {
                             val pt = kpArray.get(m.trainIdx).pt
-                            sumX += pt.x
-                            sumY += pt.y
                             if (pt.x < minMatchX) minMatchX = pt.x
                             if (pt.y < minMatchY) minMatchY = pt.y
                             if (pt.x > maxMatchX) maxMatchX = pt.x
                             if (pt.y > maxMatchY) maxMatchY = pt.y
                         }
 
-                        // Zobrazíme zelený rámček okolo nájdeného objektu s malým okrajom
                         val pad = 20.0
                         val rx1 = (minMatchX - pad).coerceIn(0.0, mat.cols().toDouble())
                         val ry1 = (minMatchY - pad).coerceIn(0.0, mat.rows().toDouble())
@@ -165,7 +156,6 @@ class ArTrackerEngine(
                         } catch (_: Exception) {
                         }
 
-                        // Zápis jasne červenej značky na 3D mapu (max 2x za sekundu)
                         val now = System.currentTimeMillis()
                         if (hasWorldPose && (now - lastMarkerTime > 500)) {
                             lastMarkerTime = now
@@ -191,7 +181,6 @@ class ArTrackerEngine(
                 }
 
                 if (!found) {
-                    // Ak objekt nie je v zábere, skryjeme zelený rámček (ale vzor držíme v pamäti!)
                     pointStart.set(0, 0)
                     pointEnd.set(0, 0)
                     trackingOverlay.postInvalidate()
