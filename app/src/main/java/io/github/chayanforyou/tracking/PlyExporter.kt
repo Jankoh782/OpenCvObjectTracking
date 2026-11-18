@@ -27,6 +27,14 @@ class PlyExporter {
     val pointCloudList = CopyOnWriteArrayList<FloatArray>()
     private val facesList = CopyOnWriteArrayList<IntArray>()
     var debugInfo: String = "Pripravený"
+    fun addTargetMarker(x: Float, y: Float, z: Float) {
+        // Pridá zhluk 5 jasne červených bodov (255, 0, 0), aby bol cieľ na mape neprehliadnuteľný
+        val offsets = floatArrayOf(0f, 0.02f, -0.02f)
+        for (ox in offsets) {
+            pointCloudList.add(floatArrayOf(x + ox, y, z, 255f, 0f, 0f))
+            pointCloudList.add(floatArrayOf(x, y + ox, z, 255f, 0f, 0f))
+        }
+    }
 
     private var prevGray: Mat? = null
     private var prevPose: Pose? = null
