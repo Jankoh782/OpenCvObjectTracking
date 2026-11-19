@@ -39,6 +39,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private lateinit var btnBluetooth: Button
     private lateinit var btnScanToggle: Button
     private lateinit var btnExportPly: Button
+    private lateinit var btnClearMap: Button
 
     private var arSession: Session? = null
     private val backgroundRenderer = BackgroundRenderer()
@@ -81,6 +82,10 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         btnBluetooth = findViewById(R.id.btn_bluetooth)
         btnScanToggle = findViewById(R.id.btn_scan_toggle)
         btnExportPly = findViewById(R.id.btn_export_ply)
+        btnClearMap = findViewById(R.id.btnClearMap)
+        btnClearMap.setOnClickListener {
+            clearEverything()
+        }
 
         btHelper = BluetoothHelper(this) { connected, deviceName ->
             btnBluetooth.text = if (connected) "BT: $deviceName" else "Pripojiť BT (Arduino)"
@@ -183,7 +188,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     } else {
                         // Zrušenie výberu druhým prstom
                         cancelTargetSelection()
-                    }
+                      }
                 }
             }
             true
@@ -203,7 +208,22 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         Toast.makeText(this, "Výber ZRUŠENÝ", Toast.LENGTH_SHORT).show()
     }
 
-
+                          private fun clearEverything() {
+        isScanning3D = false
+        btnScanToggle.text = "Štart 3D skenu"
+        plyExporter.clear()
+        trackerEngine.resetTracker()
+        isTargetLocked = false
+        drawing = Drawing.CLEAR
+        pointStart.set(0, 0)
+        pointEnd.set(0, 0)
+        trackingOverlay.invalidate()
+        selectTracker.show()
+        tvCoordinates.text = "3D Poloha: Obrazovka vyčistená"
+        updateStatusText(true)
+        btHelper.sendCoordinates(120, 120, 90)
+        Toast.makeText(this, "Mapa a obrazovka vyčistené!", Toast.LENGTH_SHORT).show()
+    }
     override fun onResume() {
         super.onResume()
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) return
