@@ -1,4 +1,4 @@
 <resources>
-    <string name="app_name">OpenCvObjectTracking</string>
+    <string name="app_name">Catacomb roboticS</string>
     <string name="select_tracker">Select Tracker</string>
 </resources>
