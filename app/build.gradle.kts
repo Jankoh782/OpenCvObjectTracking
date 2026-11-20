@@ -8,7 +8,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId "io.github.chayanforyou.robottracking"
+        applicationId = "io.github.chayanforyou.robottracking"
         minSdk = 24
         targetSdk = 36
         versionCode = 1
