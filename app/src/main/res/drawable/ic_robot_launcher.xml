@@ -1,5 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
-<layer-list xmlns:android="http://android.com">
-    <item android:drawable="@drawable/ic_robot_bg" />
-    <item android:drawable="@drawable/ic_robot_fg" />
-</layer-list>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path android:fillColor="#FFFFFF" android:pathData="M0,0h108v108h-108z" />
+
+    <path android:fillColor="#000000" android:pathData="M30,22 H78 V48 H66 A12,12 0 0 1 42,48 H30 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M68,26 H73 V31 H68 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M54,41m-9.5,0a9.5,9.5 0,1 1,19 0a9.5,9.5 0,1 1,-19 0" />
+    <path android:fillColor="#000000" android:pathData="M54,41m-5.5,0a5.5,5.5 0,1 1,11 0a5.5,5.5 0,1 1,-11 0" />
+    <path android:fillColor="#FFFFFF" android:pathData="M54,41m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0" />
+    <path android:fillColor="#000000" android:pathData="M46,56 H62 V63 H46 Z" />
+    <path android:fillColor="#000000" android:pathData="M40,67 H68 V74 H40 Z" />
+
+    <path android:fillColor="#000000" android:pathData="M21,58 A7,7 0 0 1 35,58 V60 H21 Z" />
+    <path android:fillColor="#000000" android:pathData="M21,63 H35 V68 H21 Z" />
+    <path android:fillColor="#000000" android:pathData="M21,71 H35 V76 H21 Z" />
+    <path android:fillColor="#000000" android:pathData="M21,79 H35 V81 A7,7 0 0 1 21,81 Z" />
+
+    <path android:fillColor="#000000" android:pathData="M73,58 A7,7 0 0 1 87,58 V60 H73 Z" />
+    <path android:fillColor="#000000" android:pathData="M73,63 H87 V68 H73 Z" />
+    <path android:fillColor="#000000" android:pathData="M73,71 H87 V76 H73 Z" />
+    <path android:fillColor="#000000" android:pathData="M73,79 H87 V81 A7,7 0 0 1 73,81 Z" />
+</vector>
