@@ -5,26 +5,31 @@ import kotlin.math.floor
 data class VoxelKey(val x: Int, val y: Int, val z: Int)
 
 class VoxelGridFilter(
-    // Veľkosť jednej kocky v metroch (0.05f = 5 cm; pre jemnejšiu mapu dajte napr. 0.02f)
+    // Veľkosť jednej kocky v metroch (0.05f = 5 cm)
     private val voxelSize: Float = 0.05f
 ) {
-    // Množina už navštívených voxelov
-    private val occupiedVoxels = HashSet<VoxelKey>()
+    // Pamätá si obsadený voxel a index bodu v pointCloudList
+    private val occupiedVoxels = HashMap<VoxelKey, Int>()
 
     /**
-     * Vráti true, ak je bod v novom voxeli (ešte nebol vykreslený).
-     * Vráti false, ak už na tomto mieste bod existuje (treba ho ignorovať).
+     * Vráti existujúci index bodu, ak už v tomto voxeli bod je.
+     * Ak je voxel prázdny, uloží nový index (newIndex) a vráti -1 (znak, že ide o NOVÝ bod).
      */
-    fun isNewPoint(x: Float, y: Float, z: Float): Boolean {
+    fun checkOrInsert(x: Float, y: Float, z: Float, newIndex: Int): Int {
         val vx = floor(x / voxelSize).toInt()
         val vy = floor(y / voxelSize).toInt()
         val vz = floor(z / voxelSize).toInt()
 
         val key = VoxelKey(vx, vy, vz)
-        return occupiedVoxels.add(key) // vráti true iba ak kľúč v sete ešte nebol
+        val existingIndex = occupiedVoxels[key]
+        return if (existingIndex != null) {
+            existingIndex // Bod už existuje, vrátime jeho index pre plochy (faces)
+        } else {
+            occupiedVoxels[key] = newIndex
+            -1 // Nový voxel!
+        }
     }
 
-    // Vyčistí pamäť voxelov (zavoláte pri stlačení tlačidla Clear Map)
     fun clear() {
         occupiedVoxels.clear()
     }
