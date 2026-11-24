@@ -27,6 +27,7 @@ class PlyExporter {
     val pointCloudList = CopyOnWriteArrayList<FloatArray>()
     private val facesList = CopyOnWriteArrayList<IntArray>()
     var debugInfo: String = "Pripravený"
+    private val voxelFilter = VoxelGridFilter(0.05f)
     fun addTargetMarker(x: Float, y: Float, z: Float) {
         // Pridá zhluk 5 jasne červených bodov (255, 0, 0), aby bol cieľ na mape neprehliadnuteľný
         val offsets = floatArrayOf(0f, 0.02f, -0.02f)
@@ -123,9 +124,15 @@ class PlyExporter {
                                 pixelVal.get(0).toFloat().coerceIn(30f, 255f)
                             } else 180f
 
-                            gridIndices[idx] = pointCloudList.size
-                            pointCloudList.add(floatArrayOf(wx, wy, wz, lum, lum, lum))
-                            addedNow++
+                           val existingIdx = voxelFilter.checkOrInsert(wx, wy, wz, pointCloudList.size)
+if (existingIdx == -1) {
+    gridIndices[idx] = pointCloudList.size
+    pointCloudList.add(floatArrayOf(wx, wy, wz, lum, lum, lum))
+    addedNow++
+} else {
+    gridIndices[idx] = existingIdx
+}
+
                         }
                     }
 
@@ -208,6 +215,7 @@ class PlyExporter {
         prevGray = null
         prevPose = null
         virtualStepZ = 0f
+        voxelFilter.clear()
     }
 
     fun exportToDownloads(context: Context) {
