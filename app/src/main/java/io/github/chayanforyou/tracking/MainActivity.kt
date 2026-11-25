@@ -49,7 +49,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private val pointStart = Point(0, 0)
     private val pointEnd = Point(0, 0)
     private var isTargetLocked = false
-
+    private var lastGamepadCmd: String = ""
     private var isScanning3D = false
     private var frameCounter = 0
     private val plyExporter = PlyExporter()
@@ -324,5 +324,48 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
      val arText = if (arReady) "" else " (Hýbte mobilom!)"
      tvScanStatus.text = "3D Mapa: ${plyExporter.pointCloudList.size} bodov$arText | BT: $btText"
  }
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if ((event.source and android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK &&
+            event.action == MotionEvent.ACTION_MOVE
+        ) {
+            val x = event.getAxisValue(MotionEvent.AXIS_X) + event.getAxisValue(MotionEvent.AXIS_HAT_X)
+            val y = event.getAxisValue(MotionEvent.AXIS_Y) + event.getAxisValue(MotionEvent.AXIS_HAT_Y)
+
+            val cmd = when {
+                y < -0.5f -> "g" // vpred()
+                y > 0.5f  -> "b" // vzad()
+                x < -0.5f -> "L" // vlavo()
+                x > 0.5f  -> "R" // right()
+                else      -> "s" // stop()
+            }
+
+            if (cmd != lastGamepadCmd) {
+                lastGamepadCmd = cmd
+                btHelper.sendCommand(cmd)
+            }
+            return true
+        }
+        return super.onGenericMotionEvent(event)
+    }
+
+    override fun onKeyDown(keyCode: Int, event: android.view.KeyEvent): Boolean {
+        if ((event.source and android.view.InputDevice.SOURCE_GAMEPAD) == android.view.InputDevice.SOURCE_GAMEPAD) {
+            val cmd = when (keyCode) {
+                android.view.KeyEvent.KEYCODE_BUTTON_R1 -> "h" // lift() - R1
+                android.view.KeyEvent.KEYCODE_BUTTON_L1 -> "d" // dole() - L1
+                android.view.KeyEvent.KEYCODE_BUTTON_Y  -> "l" // LEDS_ON() - Trojuholník
+                android.view.KeyEvent.KEYCODE_BUTTON_B  -> "t" // LEDS_OFF() - Krúžok
+                android.view.KeyEvent.KEYCODE_BUTTON_A  -> "s" // stop() - Krížik
+                else -> null
+            }
+            if (cmd != null) {
+                lastGamepadCmd = cmd
+                btHelper.sendCommand(cmd)
+                return true
+            }
+        }
+        return super.onKeyDown(keyCode, event)
+    }
+
 }
 
