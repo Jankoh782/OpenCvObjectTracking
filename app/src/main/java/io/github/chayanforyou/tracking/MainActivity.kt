@@ -235,7 +235,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 }
                 arSession = Session(this).apply {
                     val config = Config(this)
-                 //   if (isDepthModeSupported(Config.DepthMode.AUTOMATIC)) config.depthMode = Config.DepthMode.AUTOMATIC
+                   if (isDepthModeSupported(Config.DepthMode.AUTOMATIC)) config.depthMode = Config.DepthMode.AUTOMATIC
                     config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                     configure(config)
                 }
