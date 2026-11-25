@@ -36,186 +36,48 @@ class PlyExporter {
             pointCloudList.add(floatArrayOf(x, y + ox, z, 255f, 0f, 0f))
         }
     }
-
-    private var prevGray: Mat? = null
-    private var prevPose: Pose? = null
-    private var virtualStepZ = 0f
-
     fun collectFromFrame(frame: Frame) {
-        val camPose = frame.camera.pose
-        var camImage: Image? = null
+        if (pointCloudList.size >= 300_000) return
+
         try {
-            camImage = frame.acquireCameraImage()
-            val currGray = yuvToSmallGray(camImage)
-            val pGray = prevGray
-            val pPose = prevPose
+            // Získame skutočné 3D body priestoru z ARCore
+            frame.acquirePointCloud().use { pointCloud ->
+                val points = pointCloud.points // Buffer: [x, y, z, confidence, x, y, z, confidence...]
+                val numPoints = points.remaining() / 4
+                var addedNow = 0
 
-            if (pGray != null && pPose != null) {
-                val realDist = distance(camPose, pPose.tx(), pPose.ty(), pPose.tz())
-                val useVirtual = (realDist < 0.015f)
-                val baseDist = if (useVirtual) 0.04f else realDist
+                for (i in 0 until numPoints) {
+                    val x = points.get(i * 4)
+                    val y = points.get(i * 4 + 1)
+                    val z = points.get(i * 4 + 2)
+                    val confidence = points.get(i * 4 + 3)
 
-                if (baseDist <= 0.45f) {
-                    val cols = 32
-                    val rows = 24
-                    val stepX = 320f / (cols + 1)
-                    val stepY = 240f / (rows + 1)
+                    // Ignorujeme neisté body (šum) a body príliš ďaleko (> 5 metrov)
+                    if (confidence < 0.35f) continue
+                    if (x * x + y * y + z * z > 25f) continue
 
-                    val gridPoints = ArrayList<Point>(cols * rows)
-                    for (r in 1..rows) {
-                        for (c in 1..cols) {
-                            gridPoints.add(Point((c * stepX).toDouble(), (r * stepY).toDouble()))
-                        }
+                    // Preženieme cez tvoj VoxelGridFilter (kocky 5x5x5 cm)
+                    val existingIdx = voxelFilter.checkOrInsert(x, y, z, pointCloudList.size)
+                    if (existingIdx == -1) {
+                        // Nový reálny 3D bod -> uložíme (biela/svetlosivá farba)
+                        pointCloudList.add(floatArrayOf(x, y, z, 220f, 220f, 220f))
+                        addedNow++
                     }
-
-                    val prevPts = MatOfPoint2f(*gridPoints.toTypedArray())
-                    val nextPts = MatOfPoint2f()
-                    val status = MatOfByte()
-                    val err = MatOfFloat()
-
-                    Video.calcOpticalFlowPyrLK(pGray, currGray, prevPts, nextPts, status, err)
-
-                    val pArr = prevPts.toArray()
-                    val nArr = nextPts.toArray()
-                    val stArr = status.toArray()
-
-                    val intrinsics = frame.camera.imageIntrinsics
-                    val scale = 320f / intrinsics.imageDimensions.get(0).toFloat()
-                    val fx = intrinsics.focalLength.get(0) * scale
-                    val cx = intrinsics.principalPoint.get(0) * scale
-                    val cy = intrinsics.principalPoint.get(1) * scale
-
-                    val gridIndices = IntArray(cols * rows) { -1 }
-                    var addedNow = 0
-
-                    for (idx in pArr.indices) {
-                        if (stArr.get(idx).toInt() == 1 && pointCloudList.size < 300000) {
-                            val px = pArr.get(idx).x.toInt().coerceIn(0, pGray.cols() - 1)
-                            val py = pArr.get(idx).y.toInt().coerceIn(0, pGray.rows() - 1)
-                            val dxPx = nArr.get(idx).x - pArr.get(idx).x
-                            val dyPx = nArr.get(idx).y - pArr.get(idx).y
-                            val pixelShift = sqrt(dxPx * dxPx + dyPx * dyPx).toFloat()
-
-                            val depthZ = if (pixelShift > 1.2f) {
-                                ((fx * baseDist) / pixelShift).coerceIn(0.4f, 3.5f)
-                            } else {
-                                2.5f
-                            }
-
-                            val localX = ((px.toFloat() - cx) * depthZ) / fx
-                            val localY = -((py.toFloat() - cy) * depthZ) / fx
-
-                            val wx: Float
-                            val wy: Float
-                            val wz: Float
-                            if (!useVirtual) {
-                                val wp = pPose.transformPoint(floatArrayOf(localX, localY, -depthZ))
-                                wx = wp.get(0)
-                                wy = wp.get(1)
-                                wz = wp.get(2)
-                            } else {
-                                wx = localX
-                                wy = localY
-                                wz = -depthZ - virtualStepZ
-                            }
-
-                            val pixelVal = pGray.get(py, px)
-                            val lum = if (pixelVal != null && pixelVal.isNotEmpty()) {
-                                pixelVal.get(0).toFloat().coerceIn(30f, 255f)
-                            } else 180f
-
-                           val existingIdx = voxelFilter.checkOrInsert(wx, wy, wz, pointCloudList.size)
-if (existingIdx == -1) {
-    gridIndices[idx] = pointCloudList.size
-    pointCloudList.add(floatArrayOf(wx, wy, wz, lum, lum, lum))
-    addedNow++
-} else {
-    gridIndices[idx] = existingIdx
-}
-
-                        }
-                    }
-
-                    // Spojenie susedných bodov mriežky do súvislých 3D plôch
-                    for (r in 0 until rows - 1) {
-                        for (c in 0 until cols - 1) {
-                            val i00 = gridIndices[r * cols + c]
-                            val i10 = gridIndices[r * cols + (c + 1)]
-                            val i01 = gridIndices[(r + 1) * cols + c]
-                            val i11 = gridIndices[(r + 1) * cols + (c + 1)]
-
-                            if (i00 != -1 && i10 != -1 && i01 != -1) {
-                                if (isClose(i00, i10) && isClose(i00, i01)) {
-                                    facesList.add(intArrayOf(i00, i01, i10))
-                                }
-                            }
-                            if (i10 != -1 && i01 != -1 && i11 != -1) {
-                                if (isClose(i11, i10) && isClose(i11, i01)) {
-                                    facesList.add(intArrayOf(i10, i01, i11))
-                                }
-                            }
-                        }
-                    }
-
-                    if (addedNow > 0 && useVirtual) virtualStepZ += 0.03f
-                    debugInfo = "Plochy: ${facesList.size}, Body: ${pointCloudList.size}"
-
-                    prevPts.release()
-                    nextPts.release()
-                    status.release()
-                    err.release()
                 }
-            }
 
-            prevGray?.release()
-            prevGray = currGray
-            prevPose = camPose
+                debugInfo = "Reálne 3D body: ${pointCloudList.size} (+$addedNow)"
+            }
         } catch (e: Exception) {
-            debugInfo = "Err:${e.javaClass.simpleName}"
-        } finally {
-            camImage?.close()
+            debugInfo = "Err: ${e.javaClass.simpleName}"
         }
     }
 
-    private fun isClose(idxA: Int, idxB: Int): Boolean {
-        val a = pointCloudList.get(idxA)
-        val b = pointCloudList.get(idxB)
-        val dx = a.get(0) - b.get(0)
-        val dy = a.get(1) - b.get(1)
-        val dz = a.get(2) - b.get(2)
-        return (dx * dx + dy * dy + dz * dz) < 0.16f // Max 40 cm medzera medzi susednými bodmi
-    }
 
-    private fun yuvToSmallGray(image: Image): Mat {
-        val yPlane = image.planes.first()
-        val yBuffer = yPlane.buffer
-        val data = ByteArray(yBuffer.remaining())
-        yBuffer.get(data)
-        val fullMat = Mat(image.height, yPlane.rowStride, CvType.CV_8UC1)
-        fullMat.put(0, 0, data)
-        val cropped = fullMat.submat(0, image.height, 0, image.width)
-        val small = Mat()
-        Imgproc.resize(cropped, small, org.opencv.core.Size(320.0, 240.0))
-        cropped.release()
-        fullMat.release()
-        return small
-    }
-
-    private fun distance(pose: Pose, x: Float, y: Float, z: Float): Float {
-        val dx = x - pose.tx()
-        val dy = y - pose.ty()
-        val dz = z - pose.tz()
-        return sqrt(dx * dx + dy * dy + dz * dz)
-    }
-
+   
     fun clear() {
         pointCloudList.clear()
         facesList.clear()
-        prevGray?.release()
-        prevGray = null
-        prevPose = null
-        virtualStepZ = 0f
-        voxelFilter.clear()
+              voxelFilter.clear()
     }
 
     fun exportToDownloads(context: Context) {
