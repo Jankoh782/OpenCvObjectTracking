@@ -36,41 +36,94 @@ class PlyExporter {
             pointCloudList.add(floatArrayOf(x, y + ox, z, 255f, 0f, 0f))
         }
     }
-    fun collectFromFrame(frame: Frame) {
+       fun collectFromFrame(frame: Frame) {
         if (pointCloudList.size >= 300_000) return
 
+        var addedNow = 0
+        var usedDepth = false
+
         try {
-            // Získame skutočné 3D body priestoru z ARCore
-            frame.acquirePointCloud().use { pointCloud ->
-                val points = pointCloud.points // Buffer: [x, y, z, confidence, x, y, z, confidence...]
-                val numPoints = points.remaining() / 4
-                var addedNow = 0
+            // 1. HUSTÁ 3D MAPA STIEN A PREKÁŽOK (ARCore Depth API)
+            frame.acquireDepthImage16Bits().use { depthImage ->
+                usedDepth = true
+                val width = depthImage.width
+                val height = depthImage.height
+                val plane = depthImage.planes[0]
+                val buffer = plane.buffer.asShortBuffer()
+                val rowStride = plane.rowStride / 2
 
-                for (i in 0 until numPoints) {
-                    val x = points.get(i * 4)
-                    val y = points.get(i * 4 + 1)
-                    val z = points.get(i * 4 + 2)
-                    val confidence = points.get(i * 4 + 3)
+                val camera = frame.camera
+                val intrinsics = camera.imageIntrinsics
+                val focalLength = intrinsics.focalLength
+                val principalPoint = intrinsics.principalPoint
+                val imgDims = intrinsics.imageDimensions
 
-                    // Ignorujeme neisté body (šum) a body príliš ďaleko (> 5 metrov)
-                    if (confidence < 0.35f) continue
-                    if (x * x + y * y + z * z > 25f) continue
+                val scaleX = width.toFloat() / imgDims[0]
+                val scaleY = height.toFloat() / imgDims[1]
+                val fx = focalLength[0] * scaleX
+                val fy = focalLength[1] * scaleY
+                val cx = principalPoint[0] * scaleX
+                val cy = principalPoint[1] * scaleY
 
-                    // Preženieme cez tvoj VoxelGridFilter (kocky 5x5x5 cm)
-                    val existingIdx = voxelFilter.checkOrInsert(x, y, z, pointCloudList.size)
-                    if (existingIdx == -1) {
-                        // Nový reálny 3D bod -> uložíme (biela/svetlosivá farba)
-                        pointCloudList.add(floatArrayOf(x, y, z, 220f, 220f, 220f))
-                        addedNow++
+                val pose = camera.pose
+
+                for (y in 0 until height step 4) {
+                    for (x in 0 until width step 4) {
+                        val rawDepth = buffer.get(y * rowStride + x).toInt() and 0xFFFF
+                        // Platná vzdialenosť od 25 cm do 4.5 metra
+                        if (rawDepth in 250..4500) {
+                            val zMeters = rawDepth / 1000f
+                            val localX = (x - cx) * zMeters / fx
+                            val localY = (cy - y) * zMeters / fy
+                            val localZ = -zMeters
+
+                            val worldPt = pose.transformPoint(floatArrayOf(localX, localY, localZ))
+                            val wx = worldPt[0]
+                            val wy = worldPt[1]
+                            val wz = worldPt[2]
+
+                            if (voxelFilter.checkOrInsert(wx, wy, wz, pointCloudList.size) == -1) {
+                                val shade = ((wy + 1.0f) * 100f).coerceIn(80f, 245f)
+                                pointCloudList.add(floatArrayOf(wx, wy, wz, shade, shade, 230f))
+                                addedNow++
+                            }
+                        }
                     }
                 }
-
-                debugInfo = "Reálne 3D body: ${pointCloudList.size} (+$addedNow)"
             }
-        } catch (e: Exception) {
-            debugInfo = "Err: ${e.javaClass.simpleName}"
+        } catch (_: Exception) {
+            // Hĺbkový obraz sa ešte len inicializuje
+        }
+
+        // 2. ZÁLOŽNÝ REŽIM (ak Depth API ešte nemá dáta, zbiera rohy cez PointCloud)
+        if (!usedDepth) {
+            try {
+                frame.acquirePointCloud().use { pointCloud ->
+                    val points = pointCloud.points
+                    val numPoints = points.remaining() / 4
+                    for (i in 0 until numPoints) {
+                        val x = points.get(i * 4)
+                        val y = points.get(i * 4 + 1)
+                        val z = points.get(i * 4 + 2)
+                        val conf = points.get(i * 4 + 3)
+                        if (conf < 0.2f || x * x + y * y + z * z > 25f) continue
+
+                        if (voxelFilter.checkOrInsert(x, y, z, pointCloudList.size) == -1) {
+                            pointCloudList.add(floatArrayOf(x, y, z, 220f, 220f, 220f))
+                            addedNow++
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+        }
+
+        debugInfo = if (usedDepth) {
+            "Hustá 3D mapa: ${pointCloudList.size} (+$addedNow)"
+        } else {
+            "Inicializujem hĺbku (pohnite mobilom): ${pointCloudList.size}"
         }
     }
+
 
 
    
