@@ -42,6 +42,16 @@ class BluetoothHelper(
             activity.runOnUiThread { onStatusChanged(false, "") }
         }
     }
+        fun sendCommand(cmd: String) {
+        if (!isConnected || btOutputStream == null) return
+        try {
+            btOutputStream?.write(cmd.toByteArray())
+            btOutputStream?.flush()
+        } catch (_: Exception) {
+            isConnected = false
+            activity.runOnUiThread { onStatusChanged(false, "") }
+        }
+    }
 
     @SuppressLint("MissingPermission")
     fun showDevicesDialog(onRequestPermissions: () -> Unit) {
