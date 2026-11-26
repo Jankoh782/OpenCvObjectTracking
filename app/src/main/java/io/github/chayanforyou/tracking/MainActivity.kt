@@ -288,11 +288,13 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
                     pointCloudRenderer.draw(frame.camera, plyExporter.pointCloudList)
          frameCounter++
-         if (isScanning3D && frameCounter % 3 == 0) {
-             plyExporter.collectFromFrame(frame)
-             runOnUiThread { updateStatusText(true) }
-         }
-
+           if (isScanning3D && frameCounter % 3 == 0) {
+            val isTracking = frame.camera.trackingState == TrackingState.TRACKING
+            if (isTracking) {
+                plyExporter.collectFromFrame(frame)
+            }
+            runOnUiThread { updateStatusText(isTracking) }
+        }
 
             if (isTargetLocked) {
                 trackerEngine.processFrame(frame, pointStart, pointEnd, drawing == Drawing.DRAWING) {
@@ -322,7 +324,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
  private fun updateStatusText(arReady: Boolean = true) {
      val btText = if (btHelper.isConnected) "Pripojené" else "Odpojené"
      val arText = if (arReady) "" else " (Hýbte mobilom!)"
-     tvScanStatus.text = "3D Mapa: ${plyExporter.pointCloudList.size} bodov$arText | BT: $btText"
+            tvScanStatus.text = "3D Mapa: ${plyExporter.debugInfo}$arText | BT: $btText"
  }
     override fun onGenericMotionEvent(event: MotionEvent): Boolean {
         if ((event.source and android.view.InputDevice.SOURCE_JOYSTICK) == android.view.InputDevice.SOURCE_JOYSTICK &&
