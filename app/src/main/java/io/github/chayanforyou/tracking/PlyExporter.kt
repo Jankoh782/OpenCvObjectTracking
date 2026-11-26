@@ -41,15 +41,16 @@ class PlyExporter {
 
         var addedNow = 0
         var usedDepth = false
+        var depthErr = ""
 
         try {
             // 1. HUSTÁ 3D MAPA STIEN A PREKÁŽOK (ARCore Depth API)
             frame.acquireDepthImage16Bits().use { depthImage ->
-                usedDepth = true
                 val width = depthImage.width
                 val height = depthImage.height
                 val plane = depthImage.planes[0]
-                val buffer = plane.buffer.asShortBuffer()
+                // DÔLEŽITÉ: Little Endian poradie bajtov pre správne milimetre!
+                val buffer = plane.buffer.order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer()
                 val rowStride = plane.rowStride / 2
 
                 val camera = frame.camera
@@ -67,8 +68,8 @@ class PlyExporter {
 
                 val pose = camera.pose
 
-                for (y in 0 until height step 4) {
-                    for (x in 0 until width step 4) {
+                for (y in 0 until height step 2) {
+                    for (x in 0 until width step 2) {
                         val rawDepth = buffer.get(y * rowStride + x).toInt() and 0xFFFF
                         // Platná vzdialenosť od 25 cm do 4.5 metra
                         if (rawDepth in 250..4500) {
@@ -83,17 +84,22 @@ class PlyExporter {
                             val wz = worldPt[2]
 
                             if (voxelFilter.checkOrInsert(wx, wy, wz, pointCloudList.size) == -1) {
-                                val shade = ((wy + 1.0f) * 100f).coerceIn(80f, 245f)
-                                pointCloudList.add(floatArrayOf(wx, wy, wz, shade, shade, 230f))
+                                val g = ((wy + 1.0f) * 110f).coerceIn(20f, 180f)
+                                pointCloudList.add(floatArrayOf(wx, wy, wz, 15f, g, 210f))
                                 addedNow++
                             }
                         }
                     }
                 }
+                usedDepth = true
             }
-        } catch (_: Exception) {
-            // Hĺbkový obraz sa ešte len inicializuje
+        } catch (e: Exception) {
+            depthErr = e.javaClass.simpleName
         }
+
+        // 2. ZÁLOŽNÝ REŽIM (ak Depth API ešte nemá dáta, zbiera rohy cez PointCloud)
+        if (!usedDepth) {
+
 
         // 2. ZÁLOŽNÝ REŽIM (ak Depth API ešte nemá dáta, zbiera rohy cez PointCloud)
         if (!usedDepth) {
