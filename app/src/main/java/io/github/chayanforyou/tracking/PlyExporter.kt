@@ -93,10 +93,12 @@ class PlyExporter {
                 }
                 usedDepth = true
             }
-        } catch (e: Exception) {
+              } catch (e: Exception) {
             depthErr = e.javaClass.simpleName
         }
-        // 2. ZÁLOŽNÝ REŽIM (ak Depth API ešte nemá dáta, zbiera rohy cez PointCloud)
+
+        // 2. ZÁLOŽNÝ REŽIM (zbiera všetky body z ARCore bez obmedzenia)
+        var pcErr = ""
         if (!usedDepth) {
             try {
                 frame.acquirePointCloud().use { pointCloud ->
@@ -106,28 +108,25 @@ class PlyExporter {
                         val x = points.get(i * 4)
                         val y = points.get(i * 4 + 1)
                         val z = points.get(i * 4 + 2)
-                        val conf = points.get(i * 4 + 3)
-                        if (conf < 0.2f || x * x + y * y + z * z > 25f) continue
 
                         if (voxelFilter.checkOrInsert(x, y, z, pointCloudList.size) == -1) {
-                            pointCloudList.add(floatArrayOf(x, y, z, 220f, 220f, 220f))
+                            pointCloudList.add(floatArrayOf(x, y, z, 15f, 120f, 210f))
                             addedNow++
                         }
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                pcErr = e.javaClass.simpleName
+            }
         }
 
         debugInfo = if (usedDepth) {
-            "Hustá 3D mapa: ${pointCloudList.size} (+$addedNow)"
+            "Depth OK: ${pointCloudList.size} (+$addedNow)"
         } else {
-            "Inicializujem hĺbku (pohnite mobilom): ${pointCloudList.size}"
+            "D:$depthErr | PC:$pcErr | Body:${pointCloudList.size}"
         }
     }
 
-
-
-   
     fun clear() {
         pointCloudList.clear()
         facesList.clear()
