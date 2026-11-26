@@ -234,6 +234,14 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     return
                 }
                 arSession = Session(this).apply {
+                                    val filter = com.google.ar.core.CameraConfigFilter(this).apply {
+                    targetFps = java.util.EnumSet.of(com.google.ar.core.CameraConfig.TargetFps.TARGET_FPS_30)
+                }
+                val cameraConfigList = getSupportedCameraConfigs(filter)
+                if (cameraConfigList.isNotEmpty()) {
+                    cameraConfig = cameraConfigList[0]
+                }
+
                     val config = Config(this)
                    if (isDepthModeSupported(Config.DepthMode.AUTOMATIC)) config.depthMode = Config.DepthMode.AUTOMATIC
                     config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
