@@ -70,7 +70,7 @@ class PlyExporter {
 
                 for (y in 0 until height step 2) {
                     for (x in 0 until width step 2) {
-                        val rawDepth = buffer.get(y * rowStride + x).toInt() and 0xFFFF
+                       val rawDepth = buffer.get(y * rowStride + x).toInt() and 0x1FFF
                         // Platná vzdialenosť od 25 cm do 4.5 metra
                         if (rawDepth in 250..4500) {
                             val zMeters = rawDepth / 1000f
