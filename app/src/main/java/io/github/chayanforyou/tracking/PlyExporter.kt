@@ -96,11 +96,6 @@ class PlyExporter {
         } catch (e: Exception) {
             depthErr = e.javaClass.simpleName
         }
-
-        // 2. ZÁLOŽNÝ REŽIM (ak Depth API ešte nemá dáta, zbiera rohy cez PointCloud)
-        if (!usedDepth) {
-
-
         // 2. ZÁLOŽNÝ REŽIM (ak Depth API ešte nemá dáta, zbiera rohy cez PointCloud)
         if (!usedDepth) {
             try {
