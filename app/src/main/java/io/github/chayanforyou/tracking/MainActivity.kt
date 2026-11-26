@@ -237,6 +237,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     val config = Config(this)
                    if (isDepthModeSupported(Config.DepthMode.AUTOMATIC)) config.depthMode = Config.DepthMode.AUTOMATIC
                     config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
+                    config.focusMode = Config.FocusMode.AUTO
                     configure(config)
                 }
             } catch (e: Exception) {
@@ -293,7 +294,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             if (isTracking) {
                 plyExporter.collectFromFrame(frame)
             } else {
-                plyExporter.debugInfo = "Hľadám priestor (pohnite mobilom)..."
+              plyExporter.debugInfo = "Stav AR: ${frame.camera.trackingState} (${frame.camera.trackingFailureReason})"
             }
             runOnUiThread { updateStatusText(isTracking) }
         }
