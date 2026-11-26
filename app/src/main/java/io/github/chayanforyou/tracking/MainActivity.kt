@@ -288,10 +288,12 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
                     pointCloudRenderer.draw(frame.camera, plyExporter.pointCloudList)
          frameCounter++
-           if (isScanning3D && frameCounter % 3 == 0) {
+                 if (isScanning3D && frameCounter % 3 == 0) {
             val isTracking = frame.camera.trackingState == TrackingState.TRACKING
             if (isTracking) {
                 plyExporter.collectFromFrame(frame)
+            } else {
+                plyExporter.debugInfo = "Hľadám priestor (pohnite mobilom)..."
             }
             runOnUiThread { updateStatusText(isTracking) }
         }
