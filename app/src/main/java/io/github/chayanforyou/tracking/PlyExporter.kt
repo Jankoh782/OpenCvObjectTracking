@@ -110,8 +110,8 @@ class PlyExporter {
                         val z = points.get(i * 4 + 2)
                         val conf = points.get(i * 4 + 3)
 
-                         // Ukladáme body v okruhu do 4 metrov (4^2 = 16.0f) a s istotou >= 0.10
-                        if (conf < 0.10f || x * x + y * y + z * z > 16.0f) continue
+                                                // Odfiltrujeme iba chybné ďaleké body (> 4 m) a NaN bez obmedzenia istoty (conf)
+                        if (x.isNaN() || y.isNaN() || z.isNaN() || x * x + y * y + z * z > 16.0f) continue
 
                         if (voxelFilter.checkOrInsert(x, y, z, pointCloudList.size) == -1) {
                             // Žiarivá tyrkysovo-zelená farba
@@ -125,6 +125,14 @@ class PlyExporter {
             }
         }
 
+        debugInfo = if (usedDepth) {
+            "Depth OK: ${pointCloudList.size} (+$addedNow)"
+        } else if (pcErr.isNotEmpty()) {
+            "Pohnite na hrany/nábytok | Body: ${pointCloudList.size}"
+        } else {
+            "Skenujem: ${pointCloudList.size} (+$addedNow)"
+        }
+    }
 
             debugInfo = if (usedDepth) {
             "Depth OK: ${pointCloudList.size} (+$addedNow)"
