@@ -104,17 +104,22 @@ class PlyExporter {
                 frame.acquirePointCloud().use { pointCloud ->
                     val points = pointCloud.points
                     val numPoints = points.remaining() / 4
-                    for (i in 0 until numPoints) {
+                                      for (i in 0 until numPoints) {
                         val x = points.get(i * 4)
                         val y = points.get(i * 4 + 1)
                         val z = points.get(i * 4 + 2)
+                        val conf = points.get(i * 4 + 3)
+
+                        // Ukladáme iba presné body v okruhu do 2 metrov (2^2 = 4.0f)
+                        if (conf < 0.25f || x * x + y * y + z * z > 4.0f) continue
 
                         if (voxelFilter.checkOrInsert(x, y, z, pointCloudList.size) == -1) {
-                            pointCloudList.add(floatArrayOf(x, y, z, 15f, 120f, 210f))
+                            // Žiarivá tyrkysovo-zelená farba
+                            pointCloudList.add(floatArrayOf(x, y, z, 0f, 255f, 180f))
                             addedNow++
                         }
                     }
-                }
+
             } catch (e: Exception) {
                 pcErr = e.javaClass.simpleName
             }
