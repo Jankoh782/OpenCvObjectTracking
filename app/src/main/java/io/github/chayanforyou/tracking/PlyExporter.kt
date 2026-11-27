@@ -119,14 +119,15 @@ class PlyExporter {
                     }
                     debugInfo = "Skenujem: ${pointCloudList.size} (+$addedNow) [raw:$numPoints]"
                 }
-            } catch (e: Exception) {
+                    } catch (e: Exception) {
                 pcErr = e.javaClass.simpleName
                 debugInfo = "Pohnite na hrany/nábytok | Body: ${pointCloudList.size}"
             }
         }
+    }
 
+    fun clear() {
 
-      fun clear() {
 
         pointCloudList.clear()
         facesList.clear()
