@@ -233,15 +233,12 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     installRequested = true
                     return
                 }
-                                     arSession = Session(this).apply {
+                                        arSession = Session(this).apply {
                     val config = Config(this)
-                    config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
-                    // DepthMode na Samsung A26 blokuje tracking, používame presný SLAM PointCloud:
-                    // if (isDepthModeSupported(Config.DepthMode.AUTOMATIC)) config.depthMode = Config.DepthMode.AUTOMATIC
                     config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
-                    config.focusMode = Config.FocusMode.AUTO
                     configure(config)
                 }
+
 
             } catch (e: Exception) {
                 Toast.makeText(this, "ARCore chyba: ${e.message}", Toast.LENGTH_LONG).show()
