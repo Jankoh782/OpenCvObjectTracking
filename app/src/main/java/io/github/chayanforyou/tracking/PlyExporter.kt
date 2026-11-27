@@ -21,7 +21,7 @@ class PlyExporter {
     val pointCloudList = CopyOnWriteArrayList<FloatArray>()
     private val facesList = CopyOnWriteArrayList<IntArray>()
     var debugInfo: String = "Pripravený"
-    private val voxelFilter = VoxelGridFilter(0.04f)
+    private val voxelFilter = VoxelGridFilter(0.03f)
 
     fun addTargetMarker(x: Float, y: Float, z: Float) {
         val offsets = floatArrayOf(0f, 0.02f, -0.02f)
@@ -35,9 +35,38 @@ class PlyExporter {
         if (pointCloudList.size >= 300_000) return
 
         var addedNow = 0
-        var planeCount = 0
 
-        // 1. ZBER 3D GEOMETRIE ZO VŠETKÝCH NÁJDENÝCH PLÔCH (PODLAHA, STENY, STÔL)
+        // 1. VIRTUÁLNY LASEROVÝ SKENER (mriežka 3x3 lúčov z obrazovky kamery)
+        try {
+            val dims = frame.camera.imageDimensions
+            val w = dims[0].toFloat()
+            val h = dims[1].toFloat()
+
+            val gridFactors = floatArrayOf(0.35f, 0.50f, 0.65f)
+            for (fx in gridFactors) {
+                for (fy in gridFactors) {
+                    val hits = frame.hitTest(w * fx, h * fy)
+                    for (hit in hits) {
+                        val pose = hit.hitPose
+                        val wx = pose.tx()
+                        val wy = pose.ty()
+                        val wz = pose.tz()
+
+                        if (wx.isNaN() || wy.isNaN() || wz.isNaN()) continue
+                        if (hit.distance > 4.5f) continue
+
+                        if (voxelFilter.checkOrInsert(wx, wy, wz, pointCloudList.size) == -1) {
+                            pointCloudList.add(floatArrayOf(wx, wy, wz, 0f, 255f, 150f))
+                            addedNow++
+                        }
+                        break
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
+
+        // 2. ZBER Z ROZPOZNANÝCH PLÔCH (PODLAHA, STENY, STÔL)
         try {
             val planes = session?.getAllTrackables(Plane::class.java)
                 ?: frame.getUpdatedTrackables(Plane::class.java)
@@ -45,7 +74,6 @@ class PlyExporter {
             for (plane in planes) {
                 if (plane.trackingState != TrackingState.TRACKING) continue
                 if (plane.subsumedBy != null) continue
-                planeCount++
 
                 val poly = plane.polygon
                 poly.rewind()
@@ -58,49 +86,28 @@ class PlyExporter {
                 for (i in 0 until numVerts) {
                     val lx = poly.get(i * 2)
                     val lz = poly.get(i * 2 + 1)
-                    val wp = pose.transformPoint(floatArrayOf(lx, 0f, lz))
-                    worldVerts.add(wp)
+                    worldVerts.add(pose.transformPoint(floatArrayOf(lx, 0f, lz)))
                 }
 
-                val centerWorld = pose.transformPoint(floatArrayOf(0f, 0f, 0f))
-
                 for (i in 0 until numVerts) {
-                    val p1 = worldVerts.get(i)
-                    val p2 = worldVerts.get((i + 1) % numVerts)
+                    val p1 = worldVerts[i]
+                    val p2 = worldVerts[(i + 1) % numVerts]
 
-                    val dx = p2.get(0) - p1.get(0)
-                    val dy = p2.get(1) - p1.get(1)
-                    val dz = p2.get(2) - p1.get(2)
+                    val dx = p2[0] - p1[0]
+                    val dy = p2[1] - p1[1]
+                    val dz = p2[2] - p1[2]
                     val edgeLen = hypot(hypot(dx.toDouble(), dy.toDouble()), dz.toDouble()).toFloat()
                     val edgeSteps = ceil(edgeLen / 0.04f).toInt().coerceIn(1, 100)
 
                     for (s in 0..edgeSteps) {
                         val t = s.toFloat() / edgeSteps
-                        val wx = p1.get(0) + dx * t
-                        val wy = p1.get(1) + dy * t
-                        val wz = p1.get(2) + dz * t
+                        val wx = p1[0] + dx * t
+                        val wy = p1[1] + dy * t
+                        val wz = p1[2] + dz * t
 
                         if (voxelFilter.checkOrInsert(wx, wy, wz, pointCloudList.size) == -1) {
-                            pointCloudList.add(floatArrayOf(wx, wy, wz, 0f, 255f, 180f))
+                            pointCloudList.add(floatArrayOf(wx, wy, wz, 0f, 220f, 255f))
                             addedNow++
-                        }
-
-                        val rx = wx - centerWorld.get(0)
-                        val ry = wy - centerWorld.get(1)
-                        val rz = wz - centerWorld.get(2)
-                        val radLen = hypot(hypot(rx.toDouble(), ry.toDouble()), rz.toDouble()).toFloat()
-                        val radSteps = ceil(radLen / 0.08f).toInt().coerceIn(1, 50)
-
-                        for (r in 1 until radSteps) {
-                            val rt = r.toFloat() / radSteps
-                            val ix = centerWorld.get(0) + rx * rt
-                            val iy = centerWorld.get(1) + ry * rt
-                            val iz = centerWorld.get(2) + rz * rt
-
-                            if (voxelFilter.checkOrInsert(ix, iy, iz, pointCloudList.size) == -1) {
-                                pointCloudList.add(floatArrayOf(ix, iy, iz, 0f, 210f, 150f))
-                                addedNow++
-                            }
                         }
                     }
                 }
@@ -108,7 +115,7 @@ class PlyExporter {
         } catch (_: Exception) {
         }
 
-        // 2. DOPLNENIE SUROVÝCH BODOV Z POINTCLOUD
+        // 3. DOPLNENIE BODOV Z POINTCLOUD
         try {
             frame.acquirePointCloud().use { pointCloud ->
                 val points = pointCloud.points
@@ -121,7 +128,7 @@ class PlyExporter {
                     if (x.isNaN() || y.isNaN() || z.isNaN() || x * x + y * y + z * z > 16.0f) continue
 
                     if (voxelFilter.checkOrInsert(x, y, z, pointCloudList.size) == -1) {
-                        pointCloudList.add(floatArrayOf(x, y, z, 0f, 180f, 255f))
+                        pointCloudList.add(floatArrayOf(x, y, z, 255f, 220f, 0f))
                         addedNow++
                     }
                 }
@@ -129,7 +136,7 @@ class PlyExporter {
         } catch (_: Exception) {
         }
 
-        debugInfo = "Plochy: $planeCount | Body: ${pointCloudList.size} (+$addedNow)"
+        debugInfo = "Mapa: ${pointCloudList.size} bodov (+$addedNow)"
     }
 
     fun clear() {
@@ -165,14 +172,14 @@ class PlyExporter {
                     String.format(
                         Locale.US,
                         "%.4f %.4f %.4f %d %d %d\n",
-                        pt.get(0), pt.get(1), pt.get(2),
-                        pt.get(3).toInt(), pt.get(4).toInt(), pt.get(5).toInt()
+                        pt[0], pt[1], pt[2],
+                        pt[3].toInt(), pt[4].toInt(), pt[5].toInt()
                     )
                 )
             }
 
             for (f in facesList) {
-                sb.append("3 ${f.get(0)} ${f.get(1)} ${f.get(2)}\n")
+                sb.append("3 ${f[0]} ${f[1]} ${f[2]}\n")
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
