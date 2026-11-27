@@ -4,10 +4,9 @@ import kotlin.math.floor
 
 data class VoxelKey(val x: Int, val y: Int, val z: Int)
 
-class VoxelGridFilter(
-    // Veľkosť jednej kocky v metroch (0.05f = 5 cm)
-    private val voxelSize: Float = 0.05f
-) {
+// Veľkosť jednej kocky v metroch (0.025f = 2,5 cm)
+class VoxelGridFilter(private val voxelSize: Float = 0.025f) {
+
     // Pamätá si obsadený voxel a index bodu v pointCloudList
     private val occupiedVoxels = HashMap<VoxelKey, Int>()
 
