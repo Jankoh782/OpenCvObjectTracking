@@ -39,8 +39,8 @@ class PlyExporter {
         // 1. VIRTUÁLNY LASEROVÝ SKENER (mriežka 3x3 lúčov z obrazovky kamery)
         try {
             val dims = frame.camera.imageDimensions
-            val w = dims[0].toFloat()
-            val h = dims[1].toFloat()
+            val w = dims.get(0).toFloat()
+            val h = dims.get(1).toFloat()
 
             val gridFactors = floatArrayOf(0.35f, 0.50f, 0.65f)
             for (fx in gridFactors) {
@@ -90,20 +90,20 @@ class PlyExporter {
                 }
 
                 for (i in 0 until numVerts) {
-                    val p1 = worldVerts[i]
-                    val p2 = worldVerts[(i + 1) % numVerts]
+                    val p1 = worldVerts.get(i)
+                    val p2 = worldVerts.get((i + 1) % numVerts)
 
-                    val dx = p2[0] - p1[0]
-                    val dy = p2[1] - p1[1]
-                    val dz = p2[2] - p1[2]
+                    val dx = p2.get(0) - p1.get(0)
+                    val dy = p2.get(1) - p1.get(1)
+                    val dz = p2.get(2) - p1.get(2)
                     val edgeLen = hypot(hypot(dx.toDouble(), dy.toDouble()), dz.toDouble()).toFloat()
                     val edgeSteps = ceil(edgeLen / 0.04f).toInt().coerceIn(1, 100)
 
                     for (s in 0..edgeSteps) {
                         val t = s.toFloat() / edgeSteps
-                        val wx = p1[0] + dx * t
-                        val wy = p1[1] + dy * t
-                        val wz = p1[2] + dz * t
+                        val wx = p1.get(0) + dx * t
+                        val wy = p1.get(1) + dy * t
+                        val wz = p1.get(2) + dz * t
 
                         if (voxelFilter.checkOrInsert(wx, wy, wz, pointCloudList.size) == -1) {
                             pointCloudList.add(floatArrayOf(wx, wy, wz, 0f, 220f, 255f))
@@ -172,14 +172,14 @@ class PlyExporter {
                     String.format(
                         Locale.US,
                         "%.4f %.4f %.4f %d %d %d\n",
-                        pt[0], pt[1], pt[2],
-                        pt[3].toInt(), pt[4].toInt(), pt[5].toInt()
+                        pt.get(0), pt.get(1), pt.get(2),
+                        pt.get(3).toInt(), pt.get(4).toInt(), pt.get(5).toInt()
                     )
                 )
             }
 
             for (f in facesList) {
-                sb.append("3 ${f[0]} ${f[1]} ${f[2]}\n")
+                sb.append("3 ${f.get(0)} ${f.get(1)} ${f.get(2)}\n")
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
