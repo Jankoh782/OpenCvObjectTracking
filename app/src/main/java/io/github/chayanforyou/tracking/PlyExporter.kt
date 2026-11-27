@@ -100,39 +100,31 @@ class PlyExporter {
         // 2. ZÁLOŽNÝ REŽIM (zbiera všetky body z ARCore bez obmedzenia)
         var pcErr = ""
         if (!usedDepth) {
-            try {
+                      try {
                 frame.acquirePointCloud().use { pointCloud ->
                     val points = pointCloud.points
-                    val numPoints = points.remaining() / 4
-                                      for (i in 0 until numPoints) {
+                    points.rewind()
+                    val numPoints = points.limit() / 4
+                    for (i in 0 until numPoints) {
                         val x = points.get(i * 4)
                         val y = points.get(i * 4 + 1)
                         val z = points.get(i * 4 + 2)
-                        val conf = points.get(i * 4 + 3)
 
-                                                // Odfiltrujeme iba chybné ďaleké body (> 4 m) a NaN bez obmedzenia istoty (conf)
-                        if (x.isNaN() || y.isNaN() || z.isNaN() || x * x + y * y + z * z > 16.0f) continue
+                        if (x.isNaN() || y.isNaN() || z.isNaN() || x * x + y * y + z * z > 25.0f) continue
 
                         if (voxelFilter.checkOrInsert(x, y, z, pointCloudList.size) == -1) {
-                            // Žiarivá tyrkysovo-zelená farba
                             pointCloudList.add(floatArrayOf(x, y, z, 0f, 255f, 180f))
                             addedNow++
                         }
                     }
+                    debugInfo = "Skenujem: ${pointCloudList.size} (+$addedNow) [raw:$numPoints]"
                 }
             } catch (e: Exception) {
                 pcErr = e.javaClass.simpleName
+                debugInfo = "Pohnite na hrany/nábytok | Body: ${pointCloudList.size}"
             }
         }
 
-              debugInfo = if (usedDepth) {
-            "Depth OK: ${pointCloudList.size} (+$addedNow)"
-        } else if (pcErr.isNotEmpty()) {
-            "Pohnite na hrany/nábytok | Body: ${pointCloudList.size}"
-        } else {
-            "Skenujem: ${pointCloudList.size} (+$addedNow)"
-        }
-    }
 
       fun clear() {
 
