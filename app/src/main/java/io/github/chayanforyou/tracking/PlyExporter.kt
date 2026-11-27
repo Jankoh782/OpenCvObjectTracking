@@ -119,11 +119,12 @@ class PlyExporter {
                             addedNow++
                         }
                     }
-
+                }
             } catch (e: Exception) {
                 pcErr = e.javaClass.simpleName
             }
         }
+
 
             debugInfo = if (usedDepth) {
             "Depth OK: ${pointCloudList.size} (+$addedNow)"
