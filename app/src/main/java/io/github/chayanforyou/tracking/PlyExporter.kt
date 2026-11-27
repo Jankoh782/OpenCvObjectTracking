@@ -251,7 +251,7 @@ class PlyExporter {
         prevPose = null
     }
 
-    fun exportToDownloads(context: Context) {
+      fun exportToDownloads(context: Context) {
         if (pointCloudList.isEmpty()) {
             Toast.makeText(context, "0 bodov ($debugInfo)", Toast.LENGTH_LONG).show()
             return
@@ -265,3 +265,42 @@ class PlyExporter {
             sb.append("element vertex ${pointCloudList.size}\n")
             sb.append("property float x\n")
             sb.append("property float y\n")
+            sb.append("property float z\n")
+            sb.append("property uchar red\n")
+            sb.append("property uchar green\n")
+            sb.append("property uchar blue\n")
+            sb.append("element face ${facesList.size}\n")
+            sb.append("property list uchar int vertex_indices\n")
+            sb.append("end_header\n")
+
+            for (pt in pointCloudList) {
+                sb.append(
+                    String.format(
+                        Locale.US,
+                        "%.4f %.4f %.4f %d %d %d\n",
+                        pt.get(0), pt.get(1), pt.get(2),
+                        pt.get(3).toInt(), pt.get(4).toInt(), pt.get(5).toInt()
+                    )
+                )
+            }
+
+            for (f in facesList) {
+                sb.append("3 ${f.get(0)} ${f.get(1)} ${f.get(2)}\n")
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
+                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                }
+                context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)?.let { uri ->
+                    context.contentResolver.openOutputStream(uri)?.use { it.write(sb.toString().toByteArray()) }
+                }
+            }
+            Toast.makeText(context, "Uložené ($debugInfo): $fileName", Toast.LENGTH_LONG).show()
+        } catch (e: Exception) {
+            Toast.makeText(context, "Chyba: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+}
