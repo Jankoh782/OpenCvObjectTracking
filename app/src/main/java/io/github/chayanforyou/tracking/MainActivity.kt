@@ -245,12 +245,21 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 return
             }
         }
-        try {
-            arSession?.resume()
+               try {
             surfaceView.onResume()
-        } catch (_: Exception) {
+            arSession?.resume()
+        } catch (e: Exception) {
+            tvScanStatus.text = "AR Chyba: ${e.javaClass.simpleName} - ${e.message}"
         }
     }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            onResume()
+        }
+    }
+
 
     override fun onPause() {
         super.onPause()
