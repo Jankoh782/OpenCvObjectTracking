@@ -37,10 +37,12 @@ class PlyExporter {
         var addedNow = 0
 
         // 1. VIRTUÁLNY LASEROVÝ SKENER (mriežka 3x3 lúčov z obrazovky kamery)
+               // 1. VIRTUÁLNY LASEROVÝ SKENER (mriežka 3x3 lúčov z obrazovky kamery)
         try {
-            val dims = frame.camera.imageDimensions
+            val dims = frame.camera.imageIntrinsics.imageDimensions
             val w = dims.get(0).toFloat()
             val h = dims.get(1).toFloat()
+
 
             val gridFactors = floatArrayOf(0.35f, 0.50f, 0.65f)
             for (fx in gridFactors) {
