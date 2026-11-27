@@ -120,16 +120,17 @@ class PlyExporter {
             }
         }
 
-         debugInfo = if (usedDepth) {
+            debugInfo = if (usedDepth) {
             "Depth OK: ${pointCloudList.size} (+$addedNow)"
         } else if (pcErr.isNotEmpty()) {
             "Pohnite na hrany/nábytok | Body: ${pointCloudList.size}"
         } else {
             "Skenujem: ${pointCloudList.size} (+$addedNow)"
         }
-
+    }
 
     fun clear() {
+
         pointCloudList.clear()
         facesList.clear()
               voxelFilter.clear()
