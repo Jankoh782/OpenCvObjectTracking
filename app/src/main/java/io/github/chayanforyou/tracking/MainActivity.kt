@@ -235,6 +235,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 }
                                         arSession = Session(this).apply {
                     val config = Config(this)
+                    config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                     config.updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                     configure(config)
                 }
