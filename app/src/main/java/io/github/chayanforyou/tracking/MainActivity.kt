@@ -300,7 +300,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     pointCloudRenderer.draw(frame.camera, plyExporter.pointCloudList)
          frameCounter++
                        if (isScanning3D && frameCounter % 3 == 0) {
-            plyExporter.collectFromFrame(frame)
+                       plyExporter.collectFromFrame(frame, session)
             val isTracking = frame.camera.trackingState == TrackingState.TRACKING
             runOnUiThread { updateStatusText(isTracking) }
         }
