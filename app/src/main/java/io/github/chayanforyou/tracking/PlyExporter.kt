@@ -7,21 +7,31 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.widget.Toast
 import com.google.ar.core.Frame
-import com.google.ar.core.Plane
+import com.google.ar.core.Pose
 import com.google.ar.core.Session
-import com.google.ar.core.TrackingState
+import org.opencv.core.CvType
+import org.opencv.core.Mat
+import org.opencv.core.MatOfByte
+import org.opencv.core.MatOfFloat
+import org.opencv.core.MatOfPoint
+import org.opencv.core.MatOfPoint2f
+import org.opencv.imgproc.Imgproc
+import org.opencv.video.Video
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.CopyOnWriteArrayList
-import kotlin.math.ceil
-import kotlin.math.hypot
+import kotlin.math.sqrt
 
 class PlyExporter {
     val pointCloudList = CopyOnWriteArrayList<FloatArray>()
     private val facesList = CopyOnWriteArrayList<IntArray>()
     var debugInfo: String = "Pripravený"
     private val voxelFilter = VoxelGridFilter(0.03f)
+
+    private var prevGray: Mat? = null
+    private var prevPts: MatOfPoint2f? = null
+    private var prevPose: Pose? = null
 
     fun addTargetMarker(x: Float, y: Float, z: Float) {
         val offsets = floatArrayOf(0f, 0.02f, -0.02f)
@@ -36,115 +46,209 @@ class PlyExporter {
 
         var addedNow = 0
 
-        // 1. VIRTUÁLNY LASEROVÝ SKENER (mriežka 3x3 lúčov z obrazovky kamery)
-               // 1. VIRTUÁLNY LASEROVÝ SKENER (mriežka 3x3 lúčov z obrazovky kamery)
         try {
-            val dims = frame.camera.imageIntrinsics.imageDimensions
-            val w = dims.get(0).toFloat()
-            val h = dims.get(1).toFloat()
+            val pose = frame.camera.pose
+            val cxWorld = pose.tx()
+            val cyWorld = pose.ty()
+            val czWorld = pose.tz()
 
+            // 1. Zaznamenáme aj vlastnú trasu robota/mobilu (modré body)
+            if (voxelFilter.checkOrInsert(cxWorld, cyWorld, czWorld, pointCloudList.size) == -1) {
+                pointCloudList.add(floatArrayOf(cxWorld, cyWorld, czWorld, 0f, 170f, 255f))
+                addedNow++
+            }
 
-            val gridFactors = floatArrayOf(0.35f, 0.50f, 0.65f)
-            for (fx in gridFactors) {
-                for (fy in gridFactors) {
-                    val hits = frame.hitTest(w * fx, h * fy)
-                    for (hit in hits) {
-                        val pose = hit.hitPose
-                        val wx = pose.tx()
-                        val wy = pose.ty()
-                        val wz = pose.tz()
+            // 2. Získame obraz z kamery pre OpenCV 3D trianguláciu stien a prekážok
+            val currGray = acquireGrayMat(frame) ?: return
 
-                        if (wx.isNaN() || wy.isNaN() || wz.isNaN()) continue
-                        if (hit.distance > 4.5f) continue
+            val pGray = prevGray
+            val pPts = prevPts
+            val pPose = prevPose
+
+            if (pGray == null || pPts == null || pPose == null || pPts.empty()) {
+                val corners = MatOfPoint()
+                Imgproc.goodFeaturesToTrack(currGray, corners, 220, 0.02, 12.0)
+                val pts2f = MatOfPoint2f()
+                corners.convertTo(pts2f, CvType.CV_32FC2)
+                corners.release()
+
+                prevGray?.release()
+                prevPts?.release()
+                prevGray = currGray
+                prevPts = pts2f
+                prevPose = pose
+                debugInfo = "3D Mapa: ${pointCloudList.size} bodov (inicializujem...)"
+                return
+            }
+
+            // Vzdialenosť pohybu mobilu od referenčnej snímky (minimálne 3.5 cm pre presnú trianguláciu)
+            val dxCam = cxWorld - pPose.tx()
+            val dyCam = cyWorld - pPose.ty()
+            val dzCam = czWorld - pPose.tz()
+            val baseline = sqrt(dxCam * dxCam + dyCam * dyCam + dzCam * dzCam)
+
+            if (baseline < 0.035f) {
+                currGray.release()
+                debugInfo = "3D Mapa: ${pointCloudList.size} bodov (pohnite mobilom)"
+                return
+            }
+
+            // Sledovanie bodov medzi snímkami cez OpenCV Optical Flow
+            val nextPts = MatOfPoint2f()
+            val status = MatOfByte()
+            val err = MatOfFloat()
+            Video.calcOpticalFlowPyrLK(pGray, currGray, pPts, nextPts, status, err)
+
+            val prevArray = pPts.toArray()
+            val nextArray = nextPts.toArray()
+            val statusArray = status.toArray()
+
+            val intrinsics = frame.camera.imageIntrinsics
+            val fx = intrinsics.focalLength.get(0)
+            val fy = intrinsics.focalLength.get(1)
+            val ppx = intrinsics.principalPoint.get(0)
+            val ppy = intrinsics.principalPoint.get(1)
+
+            val c1 = floatArrayOf(pPose.tx(), pPose.ty(), pPose.tz())
+            val c2 = floatArrayOf(cxWorld, cyWorld, czWorld)
+
+            val count = minOf(prevArray.size, nextArray.size, statusArray.size)
+            for (i in 0 until count) {
+                if (statusArray.get(i).toInt() != 1) continue
+
+                val pt1 = prevArray.get(i)
+                val pt2 = nextArray.get(i)
+
+                // Lúč 1 vo svetových súradniciach
+                val dir1Local = floatArrayOf(
+                    ((pt1.x - ppx) / fx).toFloat(),
+                    ((ppy - pt1.y) / fy).toFloat(),
+                    -1.0f
+                )
+                val v1 = normalize(pPose.rotateVector(dir1Local))
+
+                // Lúč 2 vo svetových súradniciach
+                val dir2Local = floatArrayOf(
+                    ((pt2.x - ppx) / fx).toFloat(),
+                    ((ppy - pt2.y) / fy).toFloat(),
+                    -1.0f
+                )
+                val v2 = normalize(pose.rotateVector(dir2Local))
+
+                // 3D triangulácia priesečníka oboch lúčov
+                val w0x = c1.get(0) - c2.get(0)
+                val w0y = c1.get(1) - c2.get(1)
+                val w0z = c1.get(2) - c2.get(2)
+
+                val b = v1.get(0) * v2.get(0) + v1.get(1) * v2.get(1) + v1.get(2) * v2.get(2)
+                val denom = 1.0f - b * b
+                if (denom < 0.0004f) continue
+
+                val d = v1.get(0) * w0x + v1.get(1) * w0y + v1.get(2) * w0z
+                val e = v2.get(0) * w0x + v2.get(1) * w0y + v2.get(2) * w0z
+
+                val s = (b * e - d) / denom
+                val t = (e - b * d) / denom
+
+                // Platné prekážky a steny vo vzdialenosti 25 cm až 4.5 m
+                if (s in 0.25f..4.5f && t in 0.25f..4.5f) {
+                    val p1x = c1.get(0) + s * v1.get(0)
+                    val p1y = c1.get(1) + s * v1.get(1)
+                    val p1z = c1.get(2) + s * v1.get(2)
+
+                    val p2x = c2.get(0) + t * v2.get(0)
+                    val p2y = c2.get(1) + t * v2.get(1)
+                    val p2z = c2.get(2) + t * v2.get(2)
+
+                    val errDist = sqrt(
+                        (p1x - p2x) * (p1x - p2x) +
+                        (p1y - p2y) * (p1y - p2y) +
+                        (p1z - p2z) * (p1z - p2z)
+                    )
+
+                    if (errDist < 0.08f) {
+                        val wx = (p1x + p2x) * 0.5f
+                        val wy = (p1y + p2y) * 0.5f
+                        val wz = (p1z + p2z) * 0.5f
 
                         if (voxelFilter.checkOrInsert(wx, wy, wz, pointCloudList.size) == -1) {
-                            pointCloudList.add(floatArrayOf(wx, wy, wz, 0f, 255f, 150f))
-                            addedNow++
-                        }
-                        break
-                    }
-                }
-            }
-        } catch (_: Exception) {
-        }
-
-        // 2. ZBER Z ROZPOZNANÝCH PLÔCH (PODLAHA, STENY, STÔL)
-        try {
-            val planes = session?.getAllTrackables(Plane::class.java)
-                ?: frame.getUpdatedTrackables(Plane::class.java)
-
-            for (plane in planes) {
-                if (plane.trackingState != TrackingState.TRACKING) continue
-                if (plane.subsumedBy != null) continue
-
-                val poly = plane.polygon
-                poly.rewind()
-                val numVerts = poly.limit() / 2
-                if (numVerts < 3) continue
-
-                val pose = plane.centerPose
-                val worldVerts = ArrayList<FloatArray>(numVerts)
-
-                for (i in 0 until numVerts) {
-                    val lx = poly.get(i * 2)
-                    val lz = poly.get(i * 2 + 1)
-                    worldVerts.add(pose.transformPoint(floatArrayOf(lx, 0f, lz)))
-                }
-
-                for (i in 0 until numVerts) {
-                    val p1 = worldVerts.get(i)
-                    val p2 = worldVerts.get((i + 1) % numVerts)
-
-                    val dx = p2.get(0) - p1.get(0)
-                    val dy = p2.get(1) - p1.get(1)
-                    val dz = p2.get(2) - p1.get(2)
-                    val edgeLen = hypot(hypot(dx.toDouble(), dy.toDouble()), dz.toDouble()).toFloat()
-                    val edgeSteps = ceil(edgeLen / 0.04f).toInt().coerceIn(1, 100)
-
-                    for (s in 0..edgeSteps) {
-                        val t = s.toFloat() / edgeSteps
-                        val wx = p1.get(0) + dx * t
-                        val wy = p1.get(1) + dy * t
-                        val wz = p1.get(2) + dz * t
-
-                        if (voxelFilter.checkOrInsert(wx, wy, wz, pointCloudList.size) == -1) {
-                            pointCloudList.add(floatArrayOf(wx, wy, wz, 0f, 220f, 255f))
+                            pointCloudList.add(floatArrayOf(wx, wy, wz, 0f, 255f, 140f))
                             addedNow++
                         }
                     }
                 }
             }
-        } catch (_: Exception) {
+
+            nextPts.release()
+            status.release()
+            err.release()
+
+            // Nájdeme nové body v aktuálnej snímke pre ďalší krok pohybu
+            val newCorners = MatOfPoint()
+            Imgproc.goodFeaturesToTrack(currGray, newCorners, 220, 0.02, 12.0)
+            val newPts2f = MatOfPoint2f()
+            newCorners.convertTo(newPts2f, CvType.CV_32FC2)
+            newCorners.release()
+
+            pGray.release()
+            pPts.release()
+            prevGray = currGray
+            prevPts = newPts2f
+            prevPose = pose
+
+            debugInfo = "3D Mapa: ${pointCloudList.size} bodov (+$addedNow)"
+        } catch (e: Exception) {
+            debugInfo = "3D Mapa: ${pointCloudList.size} bodov"
         }
+    }
 
-        // 3. DOPLNENIE BODOV Z POINTCLOUD
-        try {
-            frame.acquirePointCloud().use { pointCloud ->
-                val points = pointCloud.points
-                points.rewind()
-                val numPoints = points.limit() / 4
-                for (i in 0 until numPoints) {
-                    val x = points.get(i * 4)
-                    val y = points.get(i * 4 + 1)
-                    val z = points.get(i * 4 + 2)
-                    if (x.isNaN() || y.isNaN() || z.isNaN() || x * x + y * y + z * z > 16.0f) continue
+    private fun acquireGrayMat(frame: Frame): Mat? {
+        return try {
+            frame.acquireCameraImage().use { image ->
+                val width = image.width
+                val height = image.height
+                val yPlane = image.planes.get(0)
+                val yBuffer = yPlane.buffer
+                val rowStride = yPlane.rowStride
 
-                    if (voxelFilter.checkOrInsert(x, y, z, pointCloudList.size) == -1) {
-                        pointCloudList.add(floatArrayOf(x, y, z, 255f, 220f, 0f))
-                        addedNow++
+                val data = ByteArray(width * height)
+                if (rowStride == width) {
+                    yBuffer.get(data)
+                } else {
+                    val rowBytes = ByteArray(rowStride)
+                    for (r in 0 until height) {
+                        yBuffer.position(r * rowStride)
+                        yBuffer.get(rowBytes, 0, width)
+                        System.arraycopy(rowBytes, 0, data, r * width, width)
                     }
                 }
+                val mat = Mat(height, width, CvType.CV_8UC1)
+                mat.put(0, 0, data)
+                mat
             }
         } catch (_: Exception) {
+            null
         }
+    }
 
-        debugInfo = "Mapa: ${pointCloudList.size} bodov (+$addedNow)"
+    private fun normalize(v: FloatArray): FloatArray {
+        val len = sqrt(v.get(0) * v.get(0) + v.get(1) * v.get(1) + v.get(2) * v.get(2))
+        return if (len > 1e-6f) {
+            floatArrayOf(v.get(0) / len, v.get(1) / len, v.get(2) / len)
+        } else {
+            floatArrayOf(0f, 0f, -1f)
+        }
     }
 
     fun clear() {
         pointCloudList.clear()
         facesList.clear()
         voxelFilter.clear()
+        prevGray?.release()
+        prevPts?.release()
+        prevGray = null
+        prevPts = null
+        prevPose = null
     }
 
     fun exportToDownloads(context: Context) {
@@ -161,42 +265,3 @@ class PlyExporter {
             sb.append("element vertex ${pointCloudList.size}\n")
             sb.append("property float x\n")
             sb.append("property float y\n")
-            sb.append("property float z\n")
-            sb.append("property uchar red\n")
-            sb.append("property uchar green\n")
-            sb.append("property uchar blue\n")
-            sb.append("element face ${facesList.size}\n")
-            sb.append("property list uchar int vertex_indices\n")
-            sb.append("end_header\n")
-
-            for (pt in pointCloudList) {
-                sb.append(
-                    String.format(
-                        Locale.US,
-                        "%.4f %.4f %.4f %d %d %d\n",
-                        pt.get(0), pt.get(1), pt.get(2),
-                        pt.get(3).toInt(), pt.get(4).toInt(), pt.get(5).toInt()
-                    )
-                )
-            }
-
-            for (f in facesList) {
-                sb.append("3 ${f.get(0)} ${f.get(1)} ${f.get(2)}\n")
-            }
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val values = ContentValues().apply {
-                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-                    put(MediaStore.Downloads.MIME_TYPE, "application/octet-stream")
-                    put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                }
-                context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)?.let { uri ->
-                    context.contentResolver.openOutputStream(uri)?.use { it.write(sb.toString().toByteArray()) }
-                }
-            }
-            Toast.makeText(context, "Uložené ($debugInfo): $fileName", Toast.LENGTH_LONG).show()
-        } catch (e: Exception) {
-            Toast.makeText(context, "Chyba: ${e.message}", Toast.LENGTH_LONG).show()
-        }
-    }
-}
