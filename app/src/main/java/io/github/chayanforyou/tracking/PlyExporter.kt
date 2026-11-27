@@ -8,6 +8,7 @@ import android.provider.MediaStore
 import android.widget.Toast
 import com.google.ar.core.Frame
 import com.google.ar.core.Plane
+import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -20,7 +21,7 @@ class PlyExporter {
     val pointCloudList = CopyOnWriteArrayList<FloatArray>()
     private val facesList = CopyOnWriteArrayList<IntArray>()
     var debugInfo: String = "Pripravený"
-    private val voxelFilter = VoxelGridFilter(0.03f)
+    private val voxelFilter = VoxelGridFilter(0.04f)
 
     fun addTargetMarker(x: Float, y: Float, z: Float) {
         val offsets = floatArrayOf(0f, 0.02f, -0.02f)
@@ -30,15 +31,17 @@ class PlyExporter {
         }
     }
 
-    fun collectFromFrame(frame: Frame) {
+    fun collectFromFrame(frame: Frame, session: Session? = null) {
         if (pointCloudList.size >= 300_000) return
 
         var addedNow = 0
         var planeCount = 0
 
-        // 1. ZBER 3D GEOMETRIE Z ROZPOZNANÝCH PLÔCH (PODLAHA, STENY, NÁBYTOK)
+        // 1. ZBER 3D GEOMETRIE ZO VŠETKÝCH NÁJDENÝCH PLÔCH (PODLAHA, STENY, STÔL)
         try {
-            val planes = frame.getUpdatedTrackables(Plane::class.java)
+            val planes = session?.getAllTrackables(Plane::class.java)
+                ?: frame.getUpdatedTrackables(Plane::class.java)
+
             for (plane in planes) {
                 if (plane.trackingState != TrackingState.TRACKING) continue
                 if (plane.subsumedBy != null) continue
@@ -61,33 +64,38 @@ class PlyExporter {
 
                 val centerWorld = pose.transformPoint(floatArrayOf(0f, 0f, 0f))
 
-                // Vykreslíme hustý obrys plochy aj lúče zo stredu (mriežka po 4 cm)
                 for (i in 0 until numVerts) {
                     val p1 = worldVerts.get(i)
                     val p2 = worldVerts.get((i + 1) % numVerts)
 
-                    // Obrysová hrana
-                    val edgeLen = hypot((p2[0] - p1[0]).toDouble(), (p2[2] - p1[2]).toDouble()).toFloat()
-                    val edgeSteps = ceil(edgeLen / 0.04f).toInt().coerceAtLeast(1)
+                    val dx = p2.get(0) - p1.get(0)
+                    val dy = p2.get(1) - p1.get(1)
+                    val dz = p2.get(2) - p1.get(2)
+                    val edgeLen = hypot(hypot(dx.toDouble(), dy.toDouble()), dz.toDouble()).toFloat()
+                    val edgeSteps = ceil(edgeLen / 0.04f).toInt().coerceIn(1, 100)
+
                     for (s in 0..edgeSteps) {
                         val t = s.toFloat() / edgeSteps
-                        val wx = p1[0] + (p2[0] - p1[0]) * t
-                        val wy = p1[1] + (p2[1] - p1[1]) * t
-                        val wz = p1[2] + (p2[2] - p1[2]) * t
+                        val wx = p1.get(0) + dx * t
+                        val wy = p1.get(1) + dy * t
+                        val wz = p1.get(2) + dz * t
 
                         if (voxelFilter.checkOrInsert(wx, wy, wz, pointCloudList.size) == -1) {
                             pointCloudList.add(floatArrayOf(wx, wy, wz, 0f, 255f, 180f))
                             addedNow++
                         }
 
-                        // Výplň plochy smerom do stredu
-                        val radLen = hypot((wx - centerWorld[0]).toDouble(), (wz - centerWorld[2]).toDouble()).toFloat()
-                        val radSteps = ceil(radLen / 0.06f).toInt().coerceAtLeast(1)
+                        val rx = wx - centerWorld.get(0)
+                        val ry = wy - centerWorld.get(1)
+                        val rz = wz - centerWorld.get(2)
+                        val radLen = hypot(hypot(rx.toDouble(), ry.toDouble()), rz.toDouble()).toFloat()
+                        val radSteps = ceil(radLen / 0.08f).toInt().coerceIn(1, 50)
+
                         for (r in 1 until radSteps) {
                             val rt = r.toFloat() / radSteps
-                            val ix = centerWorld[0] + (wx - centerWorld[0]) * rt
-                            val iy = centerWorld[1] + (wy - centerWorld[1]) * rt
-                            val iz = centerWorld[2] + (wz - centerWorld[2]) * rt
+                            val ix = centerWorld.get(0) + rx * rt
+                            val iy = centerWorld.get(1) + ry * rt
+                            val iz = centerWorld.get(2) + rz * rt
 
                             if (voxelFilter.checkOrInsert(ix, iy, iz, pointCloudList.size) == -1) {
                                 pointCloudList.add(floatArrayOf(ix, iy, iz, 0f, 210f, 150f))
@@ -100,7 +108,7 @@ class PlyExporter {
         } catch (_: Exception) {
         }
 
-        // 2. DOPLNENIE SUROVÝCH BODOV Z POINTCLOUD (AK SÚ DOSTUPNÉ)
+        // 2. DOPLNENIE SUROVÝCH BODOV Z POINTCLOUD
         try {
             frame.acquirePointCloud().use { pointCloud ->
                 val points = pointCloud.points
