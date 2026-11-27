@@ -289,15 +289,12 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
                     pointCloudRenderer.draw(frame.camera, plyExporter.pointCloudList)
          frameCounter++
-                 if (isScanning3D && frameCounter % 3 == 0) {
+                       if (isScanning3D && frameCounter % 3 == 0) {
+            plyExporter.collectFromFrame(frame)
             val isTracking = frame.camera.trackingState == TrackingState.TRACKING
-            if (isTracking) {
-                plyExporter.collectFromFrame(frame)
-            } else {
-              plyExporter.debugInfo = "Stav AR: ${frame.camera.trackingState} (${frame.camera.trackingFailureReason})"
-            }
             runOnUiThread { updateStatusText(isTracking) }
         }
+
 
             if (isTargetLocked) {
                 trackerEngine.processFrame(frame, pointStart, pointEnd, drawing == Drawing.DRAWING) {
