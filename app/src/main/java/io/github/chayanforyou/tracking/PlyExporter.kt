@@ -110,8 +110,8 @@ class PlyExporter {
                         val z = points.get(i * 4 + 2)
                         val conf = points.get(i * 4 + 3)
 
-                        // Ukladáme iba presné body v okruhu do 2 metrov (2^2 = 4.0f)
-                        if (conf < 0.25f || x * x + y * y + z * z > 4.0f) continue
+                         // Ukladáme body v okruhu do 4 metrov (4^2 = 16.0f) a s istotou >= 0.10
+                        if (conf < 0.10f || x * x + y * y + z * z > 16.0f) continue
 
                         if (voxelFilter.checkOrInsert(x, y, z, pointCloudList.size) == -1) {
                             // Žiarivá tyrkysovo-zelená farba
