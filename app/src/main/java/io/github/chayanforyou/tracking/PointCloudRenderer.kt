@@ -68,7 +68,7 @@ class PointCloudRenderer {
         val step = if (total > maxRenderPoints) (total / maxRenderPoints) + 1 else 1
         var count = 0
 
-        var i = 0
+              var i = 0
         while (i < total && count < maxRenderPoints) {
             val pt = points.get(i)
             vertexBuffer.put(pt.get(0))
@@ -82,9 +82,10 @@ class PointCloudRenderer {
         }
         vertexBuffer.flip()
 
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST)
         GLES20.glUseProgram(program)
         GLES20.glUniformMatrix4fv(mvpMatrixUniform, 1, false, vpMatrix, 0)
-        GLES20.glUniform1f(pointSizeUniform, 12.0f)
+        GLES20.glUniform1f(pointSizeUniform, 28.0f)
 
         val stride = 6 * 4
         vertexBuffer.position(0)
@@ -99,8 +100,8 @@ class PointCloudRenderer {
 
         GLES20.glDisableVertexAttribArray(positionAttrib)
         GLES20.glDisableVertexAttribArray(colorAttrib)
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
     }
-
     private fun loadShader(type: Int, code: String): Int {
         return GLES20.glCreateShader(type).also { shader ->
             GLES20.glShaderSource(shader, code)
@@ -108,3 +109,4 @@ class PointCloudRenderer {
         }
     }
 }
+
